@@ -77,6 +77,40 @@ pub fn reorder_target(ids: &[u64], splits: &[Split], from: usize, to: usize) -> 
     Some(if to > from { r } else { l })
 }
 
+/// The active index after closing tab `closed` (indices into `ids` before the close): the
+/// partner if the active half of a split is closed, else the tab that slides into its place.
+pub fn active_after_close(ids: &[u64], splits: &[Split], active: usize, closed: usize) -> usize {
+    let new_len = ids.len().saturating_sub(1);
+    if closed == active {
+        if let Some(p) = ids.get(closed).and_then(|&id| partner(splits, id)) {
+            if let Some(pi) = ids.iter().position(|&id| id == p) {
+                return if pi > closed { pi - 1 } else { pi };
+            }
+        }
+    }
+    if closed < active || active >= new_len {
+        active.saturating_sub(1).min(new_len.saturating_sub(1))
+    } else {
+        active
+    }
+}
+
+/// Which tabs (ids) should be on screen: the fullscreen page alone, else the active tab and its
+/// split partner. A fullscreen tab that no longer exists is ignored.
+pub fn visible(ids: &[u64], splits: &[Split], active: usize, fullscreen: Option<u64>) -> Vec<u64> {
+    if let Some(f) = fullscreen.filter(|f| ids.contains(f)) {
+        return vec![f];
+    }
+    let Some(&cur) = ids.get(active) else { return vec![] };
+    let mut v = vec![cur];
+    if let Some(p) = partner(splits, cur) {
+        v.push(p);
+    }
+    let pos = |id: &u64| ids.iter().position(|x| x == id);
+    v.sort_by_key(pos);
+    v
+}
+
 /// Ctrl+Tab order: inside a pair visit the other side first, then move on (wrapping).
 pub fn cycle(ids: &[u64], splits: &[Split], active: usize, forward: bool) -> usize {
     let n = ids.len();
@@ -105,7 +139,8 @@ pub fn to_saved(ids: &[u64], splits: &[Split]) -> Vec<(usize, usize, f32)> {
 pub fn from_saved(ids: &[u64], pinned: &[bool], saved: &[(usize, usize, f32)]) -> Vec<Split> {
     let mut out: Vec<Split> = Vec::new();
     for &(l, r, ratio) in saved {
-        let ok = r == l + 1
+        // `checked_sub` so a corrupt index (e.g. usize::MAX in a hand-edited file) can't overflow.
+        let ok = r.checked_sub(1) == Some(l)
             && r < ids.len()
             && !pinned.get(l).copied().unwrap_or(false)
             && !pinned.get(r).copied().unwrap_or(false)
@@ -159,6 +194,38 @@ mod tests {
         assert_eq!(partner(&s, 1), None);
         assert_eq!(insert_index(&ids, &s, 1), 3); // active = tab 2 (paired) → after tab 3
         assert_eq!(insert_index(&ids, &s, 3), 4); // active unpaired → end
+    }
+
+    #[test]
+    fn closing_a_split_side_shows_its_partner() {
+        let ids = [1, 2, 3, 4];
+        let s = [Split { left: 2, right: 3, ratio: 0.5 }];
+        // Active right half (index 2) closed: the left half (index 1) is shown, not tab 4.
+        assert_eq!(active_after_close(&ids, &s, 2, 2), 1);
+        // Active left half (index 1) closed: the right half moves to index 1.
+        assert_eq!(active_after_close(&ids, &s, 1, 1), 1);
+        // Unpaired: same as before — the tab after it, or the new last tab.
+        assert_eq!(active_after_close(&ids, &[], 1, 1), 1);
+        assert_eq!(active_after_close(&ids, &[], 3, 3), 2);
+        assert_eq!(active_after_close(&ids, &[], 3, 0), 2); // a tab left of the active one
+        assert_eq!(active_after_close(&ids, &[], 1, 3), 1); // a tab right of the active one
+    }
+
+    #[test]
+    fn visible_tabs_fall_back_when_fullscreen_tab_is_gone() {
+        let ids = [1, 2, 3];
+        let s = [Split { left: 1, right: 2, ratio: 0.5 }];
+        assert_eq!(visible(&ids, &s, 0, None), vec![1, 2]);
+        assert_eq!(visible(&ids, &s, 0, Some(2)), vec![2]);
+        assert_eq!(visible(&ids, &s, 2, None), vec![3]);
+        // The fullscreen tab was closed: show the active tab (and partner) instead of nothing.
+        assert_eq!(visible(&ids, &s, 0, Some(99)), vec![1, 2]);
+    }
+
+    #[test]
+    fn corrupt_saved_indices_dont_panic() {
+        let ids = [10, 11];
+        assert!(from_saved(&ids, &[false, false], &[(usize::MAX, 0, 0.5), (5, 6, 0.5)]).is_empty());
     }
 
     #[test]

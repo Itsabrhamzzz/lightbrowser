@@ -242,6 +242,8 @@ struct BrowserApp {
     split_next: Option<u64>,
     /// The tab whose page is fullscreen (in a split, only that page is shown).
     fullscreen_tab: Option<u64>,
+    /// Leave fullscreen next frame (its page was closed).
+    exit_fullscreen: bool,
     fullscreen: bool,
     saved_window: Option<(egui::Pos2, egui::Vec2)>,
     was_maximized: bool,
@@ -448,6 +450,7 @@ impl BrowserApp {
             splits: vec![],
             split_next: None,
             fullscreen_tab: None,
+            exit_fullscreen: false,
             fullscreen: false,
             saved_window: None,
             was_maximized: false,
@@ -717,16 +720,11 @@ impl BrowserApp {
 
     /// Show the active tab — and its split partner, if it has one — and hide every other tab.
     fn show_active(&self) {
-        let Some(cur) = self.tabs.get(self.active).map(|t| t.id) else { return };
-        if let (true, Some(f)) = (self.fullscreen, self.fullscreen_tab) {
-            for t in &self.tabs {
-                let _ = t.webview.set_visible(t.id == f);
-            }
-            return;
-        }
-        let partner = split::partner(&self.splits, cur);
+        let ids: Vec<u64> = self.tabs.iter().map(|t| t.id).collect();
+        let fullscreen = self.fullscreen_tab.filter(|_| self.fullscreen);
+        let shown = split::visible(&ids, &self.splits, self.active, fullscreen);
         for t in &self.tabs {
-            let _ = t.webview.set_visible(t.id == cur || Some(t.id) == partner);
+            let _ = t.webview.set_visible(shown.contains(&t.id));
         }
     }
 
@@ -842,6 +840,11 @@ impl BrowserApp {
         if let Some(i) = self.tabs.iter().position(|t| t.id == tab) {
             self.active = i;
             self.shown_url.clear();
+            // Typed-but-unsent address text belonged to the other side: drop it.
+            self.blur_address = true;
+            if self.panel_is(&PanelKind::Suggest) {
+                self.close_panel();
+            }
             if self.find.take().is_some() {
                 for t in &self.tabs {
                     wv2::find_stop(&t.webview);
@@ -853,6 +856,14 @@ impl BrowserApp {
     fn close(&mut self, i: usize) {
         if i >= self.tabs.len() {
             return;
+        }
+        // Decide what to show next before the split is dissolved (the partner, for a split side).
+        let ids: Vec<u64> = self.tabs.iter().map(|t| t.id).collect();
+        let next_active = split::active_after_close(&ids, &self.splits, self.active, i);
+        if self.fullscreen_tab == Some(self.tabs[i].id) {
+            // Its "fullscreen ended" event will never come; leave fullscreen ourselves.
+            self.fullscreen_tab = None;
+            self.exit_fullscreen = true;
         }
         self.end_split(self.tabs[i].id);
         let url = self.tabs[i].url.clone();
@@ -869,9 +880,7 @@ impl BrowserApp {
         }
         let was_active = i == self.active;
         self.tabs.remove(i);
-        if i < self.active || self.active >= self.tabs.len() {
-            self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1);
-        }
+        self.active = next_active.min(self.tabs.len() - 1);
         self.show_active();
         if was_active {
             let _ = self.tabs[self.active].webview.focus();
@@ -2529,6 +2538,10 @@ impl eframe::App for BrowserApp {
         };
 
         self.drain_events(&ctx);
+        if std::mem::take(&mut self.exit_fullscreen) && self.fullscreen {
+            self.set_fullscreen(false, &ctx);
+            self.show_active();
+        }
         if std::mem::take(&mut self.blur_address) {
             ctx.memory_mut(|m| m.surrender_focus(self.address_id));
         }
