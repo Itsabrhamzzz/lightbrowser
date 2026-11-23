@@ -867,8 +867,11 @@ impl BrowserApp {
         self.after_switch();
     }
 
-    /// Drag-reorder; a tab can't be dragged across the pinned / unpinned boundary.
+    /// Drag-reorder: a tab can't cross the pinned / unpinned boundary, paired tabs don't move, and
+    /// a tab dragged onto a split pair jumps over the whole pair.
     fn move_tab(&mut self, from: usize, to: usize) {
+        let ids: Vec<u64> = self.tabs.iter().map(|t| t.id).collect();
+        let Some(to) = split::reorder_target(&ids, &self.splits, from, to) else { return };
         if from < self.tabs.len() && to < self.tabs.len() && self.tabs[from].pinned == self.tabs[to].pinned {
             self.reposition(from, to);
         }
@@ -2177,6 +2180,11 @@ impl BrowserApp {
                     audible: t.audible,
                     muted: t.muted,
                     pinned: t.pinned,
+                    pair: match split::find(&self.splits, t.id).map(|k| self.splits[k]) {
+                        Some(s) if s.left == t.id => chrome::PairPos::Left,
+                        Some(_) => chrome::PairPos::Right,
+                        None => chrome::PairPos::None,
+                    },
                 })
                 .collect();
             // Leave room for the new-tab button, a strip of draggable space, and the window buttons.

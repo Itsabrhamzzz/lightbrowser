@@ -261,6 +261,29 @@ pub struct TabView<'a> {
     pub audible: bool,
     pub muted: bool,
     pub pinned: bool,
+    /// Which half of a split pair this tab is (pairs are drawn as one joined tab).
+    pub pair: PairPos,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum PairPos {
+    None,
+    Left,
+    Right,
+}
+
+/// Left edge of each tab in the strip: tabs are `GAP` apart, except the two halves of a pair.
+pub fn tab_lefts(widths: &[f32], pairs: &[PairPos]) -> Vec<f32> {
+    let mut x = 0.0;
+    widths
+        .iter()
+        .zip(pairs)
+        .map(|(w, p)| {
+            let l = x;
+            x += w + if *p == PairPos::Left { 0.0 } else { GAP };
+            l
+        })
+        .collect()
 }
 
 pub enum TabEvent {
@@ -307,15 +330,9 @@ pub fn tab_strip(
         ((area.width() - pinned_w - GAP * normal_n as f32) / normal_n as f32).clamp(TAB_MIN, TAB_MAX)
     };
     let widths: Vec<f32> = tabs.iter().map(|t| if t.pinned { PIN_W } else { tab_w }).collect();
-    let lefts: Vec<f32> = widths
-        .iter()
-        .scan(0.0, |x, w| {
-            let l = *x;
-            *x += w + GAP;
-            Some(l)
-        })
-        .collect();
-    let content_w = (widths.iter().map(|w| w + GAP).sum::<f32>() - GAP).max(0.0);
+    let pairs: Vec<PairPos> = tabs.iter().map(|t| t.pair).collect();
+    let lefts = tab_lefts(&widths, &pairs);
+    let content_w = lefts.last().zip(widths.last()).map_or(0.0, |(l, w)| l + w);
     let visible_w = area.width().min(content_w);
     let strip = Rect::from_min_size(egui::pos2(area.left(), area.center().y - TAB_H / 2.0), Vec2::new(visible_w, TAB_H));
     let mut event = None;
@@ -345,19 +362,38 @@ pub fn tab_strip(
     for (i, t) in tabs.iter().enumerate() {
         let rect = Rect::from_min_size(egui::pos2(strip.left() + lefts[i] - off, strip.top()), Vec2::new(widths[i], TAB_H));
         // Stable per-tab id so a drag survives the tab moving to a new slot.
-        let resp = ui.interact(rect.intersect(strip), Id::unique(("tab", t.id)), Sense::click_and_drag());
+        // Halves of a split pair can't be dragged.
+        let sense = if t.pair == PairPos::None { Sense::click_and_drag() } else { Sense::click() };
+        let resp = ui.interact(rect.intersect(strip), Id::unique(("tab", t.id)), sense);
         rects.push((rect, resp));
     }
     let centers: Vec<f32> = rects.iter().map(|(r, _)| r.center().x).collect();
     for (i, (t, (rect, resp))) in tabs.iter().zip(&rects).enumerate() {
         let is_active = i == active;
+        // A pair is "on screen" when either half is the active tab; it then gets one card.
+        let pair_shown = match t.pair {
+            PairPos::None => false,
+            PairPos::Left => is_active || i + 1 == active,
+            PairPos::Right => is_active || i == active + 1,
+        };
         let p = &painter;
         let radius = CornerRadius::same(10);
-        if is_active || resp.dragged() {
+        if t.pair == PairPos::Left && pair_shown {
+            let whole = rects.get(i + 1).map_or(*rect, |(r, _)| rect.union(*r));
+            p.add(pal.card_shadow().as_shape(whole, radius));
+            p.rect_filled(whole, radius, pal.card);
+        } else if (is_active || resp.dragged()) && t.pair == PairPos::None {
             p.add(pal.card_shadow().as_shape(*rect, radius));
             p.rect_filled(*rect, radius, pal.card);
-        } else if resp.hovered() {
+        } else if resp.hovered() && !pair_shown {
             p.rect_filled(*rect, radius, pal.hover);
+        }
+        if t.pair == PairPos::Right {
+            // Thin line between the two halves.
+            p.line_segment(
+                [egui::pos2(rect.left(), rect.top() + 7.0), egui::pos2(rect.left(), rect.bottom() - 7.0)],
+                Stroke::new(1.0, pal.border),
+            );
         }
 
         // Icon: spinner while loading, else favicon, else a soft placeholder dot.
@@ -408,7 +444,13 @@ pub fn tab_strip(
                 let pos = egui::pos2(text_left, rect.center().y - galley.size().y / 2.0);
                 p.with_clip_rect(text_rect).galley(pos, galley.clone(), color);
                 if galley.size().x > text_rect.width() {
-                    let bg = if is_active { pal.card } else if resp.hovered() { blend(pal.bg, pal.hover) } else { pal.bg };
+                    let bg = if is_active || pair_shown {
+                        pal.card
+                    } else if resp.hovered() {
+                        blend(pal.bg, pal.hover)
+                    } else {
+                        pal.bg
+                    };
                     fade_right(p, text_rect, bg);
                 }
             }
@@ -483,6 +525,14 @@ fn fade_right(p: &Painter, rect: Rect, bg: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pair_halves_touch() {
+        use PairPos::*;
+        // Normal tabs are GAP apart; the two halves of a pair have no gap between them.
+        let lefts = tab_lefts(&[100.0, 100.0, 100.0, 100.0], &[None, Left, Right, None]);
+        assert_eq!(lefts, vec![0.0, 100.0 + GAP, 200.0 + GAP, 300.0 + 2.0 * GAP]);
+    }
 
     #[test]
     fn reorder_math() {
