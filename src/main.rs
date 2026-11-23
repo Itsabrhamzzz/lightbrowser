@@ -3,6 +3,7 @@
 mod adblock;
 mod chrome;
 mod extensions;
+mod split;
 mod store;
 mod suggest;
 mod theme;
