@@ -1157,7 +1157,7 @@ impl BrowserApp {
         let kept: Vec<&Tab> = self.tabs.iter().filter(|t| !t.url.starts_with("chrome-extension://")).collect();
         let pinned = kept.iter().take_while(|t| t.pinned).count();
         let tabs: Vec<String> = kept.iter().map(|t| t.url.clone()).collect();
-        let s = store::Session { active: self.active.min(tabs.len().saturating_sub(1)), tabs, pinned };
+        let s = store::Session { active: self.active.min(tabs.len().saturating_sub(1)), tabs, pinned, splits: vec![] };
         if s != self.saved_session {
             store::save_session(&s);
             self.saved_session = s;

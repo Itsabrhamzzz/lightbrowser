@@ -34,6 +34,8 @@ pub struct Session {
     pub active: usize,
     /// How many of the first tabs are pinned.
     pub pinned: usize,
+    /// Split view pairs: (left index, right index) into `tabs`, and the left pane's share of the width.
+    pub splits: Vec<(usize, usize, f32)>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -224,7 +226,13 @@ mod tests {
         std::fs::write(d.join("session.json"), r#"{"tabs":["https://a.com/"],"active":0}"#).unwrap();
         let s: Session = load_in(&d, "session.json");
         assert_eq!(s.pinned, 0);
-        let s = Session { tabs: vec!["https://a.com/".into(), "https://b.com/".into()], active: 1, pinned: 1 };
+        assert!(s.splits.is_empty());
+        let s = Session {
+            tabs: vec!["https://a.com/".into(), "https://b.com/".into()],
+            active: 1,
+            pinned: 1,
+            splits: vec![(0, 1, 0.4)],
+        };
         save_in(&d, "session.json", &s);
         assert_eq!(load_in::<Session>(&d, "session.json"), s);
         let _ = std::fs::remove_dir_all(&d);
