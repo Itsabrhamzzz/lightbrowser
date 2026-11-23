@@ -93,6 +93,25 @@ pub fn on_history(wv: &WebView, notify: impl Fn(bool, bool) + 'static) {
     }
 }
 
+/// Report whether the page shows a fullscreen element (video fullscreen etc.). Comes from WebView2
+/// itself, so a page can't fake it with a message.
+pub fn on_fullscreen(wv: &WebView, notify: impl Fn(bool) + 'static) {
+    let core = wv.webview();
+    let handler = ContainsFullScreenElementChangedEventHandler::create(Box::new(move |sender, _| {
+        if let Some(c) = sender {
+            let mut full = BOOL(0);
+            unsafe {
+                let _ = c.ContainsFullScreenElement(&mut full);
+            }
+            notify(full.as_bool());
+        }
+        Ok(())
+    }));
+    unsafe {
+        let _ = core.add_ContainsFullScreenElementChanged(&handler, &mut 0);
+    }
+}
+
 /// Report (playing audio, muted) whenever either changes.
 pub fn on_audio(wv: &WebView, notify: impl Fn(bool, bool) + Clone + 'static) {
     let Ok(core) = wv.webview().cast::<ICoreWebView2_8>() else { return };

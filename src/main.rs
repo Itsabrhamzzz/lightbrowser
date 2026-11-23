@@ -93,8 +93,6 @@ impl Action {
             "reload" => Self::Reload,
             "back" => Self::Back,
             "forward" => Self::Forward,
-            "fs:1" => Self::Fullscreen(true),
-            "fs:0" => Self::Fullscreen(false),
             "pip" => Self::Pip,
             "find" => Self::Find,
             "history" => Self::History,
@@ -252,6 +250,9 @@ struct BrowserApp {
     blur_address: bool,
     /// Bookmark being renamed inline: (index, text, needs focus).
     bm_rename: Option<(usize, String, bool)>,
+    /// key.js with this run's IPC secret filled in.
+    key_script: String,
+    ipc_token: Arc<str>,
     /// Sites with ad blocking turned off, shared with every tab's request filter.
     adblock_off: wv2::AdblockOff,
     /// Site icons by host, collected from tabs, for the bookmarks bar.
@@ -266,6 +267,26 @@ struct BrowserApp {
     ext_folders: std::collections::HashMap<String, PathBuf>,
     ext_items: Vec<(String, String, bool)>,
     ext_status: (String, bool),
+}
+
+/// A random secret for this run of the browser (128 bits from the OS-seeded hasher keys).
+fn new_ipc_token() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    (0..2)
+        .map(|i| {
+            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+            h.write_u64(i);
+            h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+            format!("{:016x}", h.finish())
+        })
+        .collect()
+}
+
+/// A shortcut action from a page, accepted only with this run's secret (`k:<token>:<action>`).
+/// Pages can call the IPC bridge directly, but only our injected key.js knows the token.
+fn shortcut_from_ipc(body: &str, token: &str) -> Option<Action> {
+    let rest = body.strip_prefix("k:")?.strip_prefix(token)?.strip_prefix(':')?;
+    Action::from_ipc(rest)
 }
 
 fn tab_mut(tabs: &mut [Tab], id: u64) -> Option<&mut Tab> {
@@ -376,6 +397,7 @@ impl BrowserApp {
         let (tx, rx) = channel();
         let settings = store::settings();
         let session = store::session();
+        let ipc_token = new_ipc_token();
         let adblock_off = Arc::new(std::sync::RwLock::new(settings.adblock_off.iter().cloned().collect()));
         let (pending, restore_active) = if settings.restore_session && !session.tabs.is_empty() {
             (session.tabs.clone(), Some(session.active))
@@ -425,6 +447,8 @@ impl BrowserApp {
             bm_rename: None,
             favicons: Default::default(),
             adblock_off,
+            key_script: KEY_SCRIPT.replace("__LB_TOKEN__", &ipc_token),
+            ipc_token: ipc_token.into(),
             panel_touched: false,
             puzzle_right: 0.0,
             pin_anchors: Default::default(),
@@ -481,10 +505,11 @@ impl BrowserApp {
         let history = self.history.clone();
         let page_host = Arc::new(Mutex::new(host_of(url)));
         let nav_host = page_host.clone();
+        let token = self.ipc_token.clone();
         let built = WebViewBuilder::new_with_web_context(&mut self.web_context)
             .with_url(url)
             .with_bounds(bounds)
-            .with_initialization_script(KEY_SCRIPT)
+            .with_initialization_script(&self.key_script)
             .with_initialization_script(AD_SCRIPT)
             .with_initialization_script_for_main_only(PIP_SCRIPT, false)
             .with_initialization_script(STORE_SCRIPT)
@@ -526,7 +551,7 @@ impl BrowserApp {
                     if host == "lb.localhost" {
                         s_ipc(Ev::LocalCmd(body.clone()));
                     }
-                } else if let Some(a) = Action::from_ipc(body) {
+                } else if let Some(a) = shortcut_from_ipc(body, &token) {
                     s_ipc(Ev::Act(a));
                 }
             })
@@ -557,6 +582,8 @@ impl BrowserApp {
         wv2::on_find(&webview, move |i, n| s(Ev::FindCount(id, i, n)));
         let s = send.clone();
         wv2::on_audio(&webview, move |a, m| s(Ev::Audio(id, a, m)));
+        let s = send.clone();
+        wv2::on_fullscreen(&webview, move |on| s(Ev::Act(Action::Fullscreen(on))));
         if !self.ext_loaded {
             self.ext_loaded = true;
             extensions::load_all(&webview, self.ext_notify(ctx));
@@ -2433,5 +2460,18 @@ mod tests {
         assert_eq!(Action::from_ipc("devtools"), Some(Action::DevTools));
         assert_eq!(Action::from_ipc("tab:x"), None);
         assert_eq!(Action::from_ipc("nope"), None);
+        // Pages can't switch fullscreen by message; that comes from WebView2.
+        assert_eq!(Action::from_ipc("fs:1"), None);
+    }
+
+    #[test]
+    fn shortcuts_need_the_token() {
+        let t = "0123456789abcdef0123456789abcdef";
+        assert_eq!(super::shortcut_from_ipc(&format!("k:{t}:close"), t), Some(Action::Close));
+        assert_eq!(super::shortcut_from_ipc("close", t), None);
+        assert_eq!(super::shortcut_from_ipc("k:wrong:close", t), None);
+        assert_eq!(super::shortcut_from_ipc(&format!("k:{t}close"), t), None);
+        assert_ne!(super::new_ipc_token(), super::new_ipc_token());
+        assert_eq!(super::new_ipc_token().len(), 32);
     }
 }
