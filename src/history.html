@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>History</title>
+<link rel="stylesheet" href="/theme.css">
+<link rel="icon" href="/favicon.png">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body { font-family: var(--font); color: var(--text); background: var(--bg); }
+  body::before {
+    content: ""; position: fixed; inset: -20%; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(40% 30% at 80% 0%, var(--accent-soft), transparent 70%),
+      linear-gradient(180deg, var(--bg-2), var(--bg));
+  }
+  main { max-width: 780px; margin: 0 auto; padding: 44px 24px 70px; }
+  .glass {
+    background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow);
+    backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  }
+  .head { display: flex; align-items: center; gap: 14px; margin-bottom: 26px; }
+  .head .badge { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); flex: none; }
+  .head .badge svg { width: 24px; height: 24px; }
+  h1 { font-size: 26px; font-weight: 600; margin: 0; letter-spacing: -.3px; }
+  .sub { color: var(--muted); font-size: 13.5px; margin: 2px 0 0; }
+
+  .tools { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+  input[type=text] {
+    flex: 1; min-width: 220px; height: 42px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--border);
+    background: var(--hover); color: var(--text); font: inherit; outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  input[type=text]::placeholder { color: var(--muted); }
+  input[type=text]:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  button {
+    height: 42px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--hover);
+    color: var(--text); font: inherit; font-size: 13.5px; cursor: pointer; transition: border-color .15s, background .15s, color .15s;
+  }
+  button:hover { border-color: var(--accent); }
+  button.danger:hover { border-color: #e5484d; color: #e5484d; }
+
+  .day { border-radius: var(--radius); padding: 10px; margin-bottom: 14px; }
+  .day h2 { margin: 4px 10px 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .item { display: flex; align-items: center; gap: 12px; padding: 7px 8px 7px 10px; border-radius: var(--radius-sm); color: var(--text); text-decoration: none; }
+  .item:hover, .item:focus-visible { background: var(--hover); outline: none; }
+  .item .time { width: 64px; flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .item .ic { width: 22px; height: 22px; border-radius: 6px; flex: none; display: grid; place-items: center; overflow: hidden; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 700; }
+  .item .ic:has(img) { background: #f4f5f8; }
+  .item .ic img { width: 16px; height: 16px; }
+  .item .t { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+  .item .d { flex: 1 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+  .item .x {
+    flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted);
+    display: grid; place-items: center; opacity: 0;
+  }
+  .item:hover .x, .item .x:focus-visible { opacity: 1; }
+  .item .x:hover { background: rgba(229,72,77,.14); color: #e5484d; }
+  .item .x svg { width: 12px; height: 12px; }
+  .empty { padding: 40px 20px; text-align: center; color: var(--muted); border-radius: var(--radius); border: 1.5px dashed var(--border); }
+  #more { display: block; margin: 0 auto; }
+  #more[hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <div class="head">
+    <div class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+    <div><h1>History</h1><p class="sub" id="sub">Pages you've visited.</p></div>
+  </div>
+  <div class="tools">
+    <input type="text" id="q" placeholder="Search history" autocomplete="off" autofocus>
+    <button class="danger" id="clear">Clear browsing history</button>
+  </div>
+  <div id="list"></div>
+  <button id="more" hidden>Show more</button>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const send = m => { try { window.ipc.postMessage(m); } catch (_) {} };
+  const X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+  const PAGE = 300;
+  let all = [], limit = PAGE;
+
+  const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (_) { return ''; } };
+  function favicon(url, title) {
+    const box = document.createElement('div'); box.className = 'ic';
+    const h = host(url);
+    const letter = () => { box.textContent = ((title || h || '?')[0] || '?').toUpperCase(); };
+    if (!h) { letter(); return box; }
+    const img = document.createElement('img'); img.alt = ''; img.referrerPolicy = 'no-referrer'; img.loading = 'lazy';
+    img.src = `https://icons.duckduckgo.com/ip3/${h}.ico`; img.onerror = () => { img.remove(); letter(); };
+    box.append(img); return box;
+  }
+  function dayLabel(d) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const day = new Date(d); day.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - day) / 86400000);
+    const full = d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: day.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
+    return diff === 0 ? 'Today — ' + full : diff === 1 ? 'Yesterday — ' + full : full;
+  }
+
+  function render() {
+    const q = $('q').value.trim().toLowerCase();
+    const shown = q ? all.filter(e => (e.title + ' ' + e.url).toLowerCase().includes(q)) : all;
+    const box = $('list'); box.textContent = '';
+    $('sub').textContent = all.length ? `${all.length} page${all.length === 1 ? '' : 's'} visited.` : "Pages you've visited.";
+    $('clear').disabled = !all.length;
+    if (!shown.length) {
+      const e = document.createElement('div'); e.className = 'empty';
+      e.textContent = q ? 'No history matches your search.' : 'No history yet. Pages you visit will show up here.';
+      box.append(e); $('more').hidden = true; return;
+    }
+    let section = null, lastKey = '';
+    for (const e of shown.slice(0, limit)) {
+      const d = new Date(e.last * 1000);
+      const key = d.toDateString();
+      if (key !== lastKey) {
+        lastKey = key;
+        section = document.createElement('section'); section.className = 'day glass';
+        const h = document.createElement('h2'); h.textContent = dayLabel(d); section.append(h);
+        box.append(section);
+      }
+      const a = document.createElement('a'); a.className = 'item'; a.href = e.url; a.title = e.url;
+      const time = document.createElement('div'); time.className = 'time';
+      time.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const t = document.createElement('div'); t.className = 't'; t.textContent = e.title || host(e.url) || e.url;
+      const u = document.createElement('div'); u.className = 'd'; u.textContent = host(e.url);
+      const x = document.createElement('button'); x.className = 'x'; x.innerHTML = X; x.title = 'Remove from history';
+      x.onclick = ev => { ev.preventDefault(); ev.stopPropagation(); send('hist:remove:' + e.url); };
+      a.append(time, favicon(e.url, e.title), t, u, x);
+      section.append(a);
+    }
+    $('more').hidden = shown.length <= limit;
+  }
+
+  async function load() {
+    try { all = await (await fetch('/api/history', { cache: 'no-store' })).json(); } catch (_) { all = []; }
+    render();
+  }
+  window.__lbRefresh = load;
+  $('q').addEventListener('input', () => { limit = PAGE; render(); });
+  $('more').onclick = () => { limit += PAGE; render(); };
+  $('clear').onclick = () => { if (confirm('Clear all browsing history?')) send('hist:clear'); };
+  load();
+})();
+</script>
+</body>
+</html>

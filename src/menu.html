@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Menu</title>
+<link rel="stylesheet" href="/theme.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--font); color: var(--text); background: var(--card-solid); font-size: 13px;
+    border: 1px solid var(--border); border-radius: 12px; overflow: hidden; user-select: none; padding: 5px;
+  }
+  /* A context menu sizes to its content; suggestions fill the width the browser gives them. */
+  body.menu { width: max-content; min-width: 210px; max-width: 360px; }
+  body.suggest { width: 100%; padding: 6px; }
+  #list { max-height: 520px; overflow-y: auto; }
+  .row { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+  .row.dis { opacity: .45; cursor: default; }
+  body.menu .row:not(.dis):hover, .row.sel { background: var(--hover); }
+  body.menu .row.kb { background: var(--hover); }
+  .row .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .row .hint { color: var(--muted); font-size: 12px; margin-left: 18px; }
+  .row.danger .lbl { color: #e5484d; }
+  .sep { height: 1px; margin: 5px 6px; background: var(--border); }
+  .ico { width: 18px; height: 18px; flex: none; display: grid; place-items: center; color: var(--muted); }
+  .ico svg { width: 16px; height: 16px; }
+  .ico img { width: 16px; height: 16px; border-radius: 3px; }
+
+  body.suggest .row { height: 38px; gap: 12px; }
+  body.suggest .row:hover:not(.sel) { background: color-mix(in srgb, var(--hover) 55%, transparent); }
+  .row.sel .ico { color: var(--accent); }
+  .txt { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; overflow: hidden; }
+  .txt .t { overflow: hidden; text-overflow: ellipsis; font-size: 13.5px; flex: 0 1 auto; }
+  .txt .u { overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 12.5px; flex: 0 10 auto; }
+  .txt .u.link { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div id="list"></div>
+<script>
+(() => {
+  const send = m => { try { window.ipc.postMessage(m); } catch (_) {} };
+  const svg = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const ICONS = {
+    search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
+    url: svg('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
+    history: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+    bookmark: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 3.5A1.5 1.5 0 0 1 7.5 2h9A1.5 1.5 0 0 1 18 3.5V21l-6-4-6 4z"/></svg>',
+  };
+  const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (_) { return ''; } };
+  const bare = u => u.replace(/^[a-z]+:\/\//i, '').replace(/^www\./, '').replace(/\/$/, '');
+  let rows = [], kb = -1;
+
+  function icon(name, url) {
+    const box = document.createElement('div'); box.className = 'ico';
+    if (name === 'favicon' && host(url)) {
+      const img = document.createElement('img'); img.alt = ''; img.referrerPolicy = 'no-referrer';
+      img.src = `https://icons.duckduckgo.com/ip3/${host(url)}.ico`;
+      img.onerror = () => { box.innerHTML = ICONS.url; };
+      box.append(img);
+    } else if (ICONS[name]) box.innerHTML = ICONS[name];
+    return box;
+  }
+
+  // data: { mode: "menu" | "suggest", items: [...], sel?: number }
+  //   menu item:    { label, cmd?, hint?, icon?, url?, sep?, disabled?, danger? }
+  //   suggest item: { title, url, kind: "search" | "url" | "history" | "bookmark" }
+  window.__lbMenu = data => {
+    document.body.className = data.mode;
+    const box = document.getElementById('list'); box.textContent = '';
+    rows = []; kb = -1;
+    (data.items || []).forEach((it, i) => {
+      if (it.sep) { const s = document.createElement('div'); s.className = 'sep'; box.append(s); return; }
+      const row = document.createElement('div'); row.className = 'row';
+      if (data.mode === 'suggest') {
+        if (i === data.sel) row.classList.add('sel');
+        const txt = document.createElement('div'); txt.className = 'txt';
+        const t = document.createElement('span'); t.className = 't';
+        const u = document.createElement('span'); u.className = 'u';
+        if (it.kind === 'search') { t.textContent = it.title; u.textContent = '— Search the web'; }
+        else if (it.kind === 'url') { t.textContent = bare(it.url); u.textContent = '— Go to site'; }
+        else { t.textContent = it.title || bare(it.url); u.textContent = bare(it.url); u.classList.add('link'); }
+        txt.append(t, u);
+        row.append(icon(it.kind, it.url), txt);
+        row.onmousedown = e => { e.preventDefault(); send('menu:sug:go:' + i); };
+      } else {
+        if (it.disabled) row.classList.add('dis');
+        if (it.danger) row.classList.add('danger');
+        if (it.icon) row.append(icon(it.icon, it.url));
+        const l = document.createElement('div'); l.className = 'lbl'; l.textContent = it.label; row.append(l);
+        if (it.hint) { const h = document.createElement('div'); h.className = 'hint'; h.textContent = it.hint; row.append(h); }
+        if (!it.disabled && it.cmd) { row.onclick = () => send('menu:' + it.cmd); rows.push(row); }
+      }
+      box.append(row);
+    });
+  };
+
+  // Keyboard use of a context menu (the menu has focus; suggestions are driven from the address bar).
+  addEventListener('keydown', e => {
+    if (document.body.className !== 'menu' || !rows.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (kb >= 0) rows[kb].classList.remove('kb');
+      const down = e.key === 'ArrowDown';
+      kb = kb < 0 ? (down ? 0 : rows.length - 1) : (kb + (down ? 1 : rows.length - 1)) % rows.length;
+      rows[kb].classList.add('kb');
+    } else if (e.key === 'Enter' && kb >= 0) { e.preventDefault(); rows[kb].click(); }
+  });
+  send('menu:ready');
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New Tab</title>
+<link rel="stylesheet" id="theme" href="/theme.css">
+<link rel="icon" href="/favicon.png">
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: var(--font); color: var(--text); background: var(--bg);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px;
+    padding: 40px 24px 80px; overflow-x: hidden;
+  }
+  /* Soft accent glow behind everything */
+  body::before {
+    content: ""; position: fixed; inset: -20%; z-index: -2; pointer-events: none;
+    background:
+      radial-gradient(42% 38% at 22% 18%, var(--accent-soft), transparent 70%),
+      radial-gradient(38% 34% at 82% 86%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%),
+      linear-gradient(180deg, var(--bg-2), var(--bg));
+  }
+  body.has-bg::before { background: none; }
+  #bgimg { position: fixed; inset: 0; z-index: -2; background: center / cover no-repeat; }
+  #bgimg::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,.15), rgba(0,0,0,.45)); }
+  body.has-bg { color: #fff; }
+
+  .glass {
+    background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow);
+    backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  }
+
+  header { text-align: center; }
+  #clock { font-size: 76px; font-weight: 250; letter-spacing: -3px; line-height: 1; font-variant-numeric: tabular-nums; }
+  #greet { margin-top: 8px; font-size: 19px; color: var(--muted); }
+  body.has-bg #greet { color: rgba(255,255,255,.85); }
+
+  form { width: min(640px, 100%); position: relative; }
+  #q {
+    width: 100%; height: 54px; padding: 0 22px 0 52px; font: inherit; font-size: 16.5px; color: var(--text);
+    border-radius: 27px; outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  #q::placeholder { color: var(--muted); }
+  #q:focus { border-color: var(--accent); box-shadow: var(--shadow), 0 0 0 4px var(--accent-soft); }
+  form svg { z-index: 1; position: absolute; left: 20px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; color: var(--muted); pointer-events: none; }
+
+  #links { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; width: min(760px, 100%); }
+  .tile {
+    width: 96px;
+    position: relative; display: flex; flex-direction: column; align-items: center; gap: 9px; padding: 16px 6px 12px;
+    border-radius: var(--radius); color: var(--text); text-decoration: none; font-size: 12.5px;
+    transition: transform .15s ease, background .15s; cursor: pointer;
+  }
+  .tile:hover { transform: translateY(-3px); }
+  .tile .ico {
+    width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; overflow: hidden;
+    background: var(--card-solid); border: 1px solid var(--border); font-weight: 600; font-size: 18px; color: var(--accent);
+  }
+  .tile .ico:has(img) { background: #f4f5f8; border-color: transparent; }
+  .tile .ico img { width: 26px; height: 26px; }
+  .tile .name { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile .x {
+    position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border: 0; border-radius: 50%;
+    background: var(--card-solid); color: var(--muted); cursor: pointer; display: none; font-size: 14px; line-height: 1;
+    box-shadow: 0 2px 6px rgba(0,0,0,.2);
+  }
+  .tile .x:hover { color: #e5484d; }
+  body.editing .tile .x { display: block; }
+  body.editing .tile:not(.add) { animation: wiggle .3s ease-in-out infinite alternate; }
+  @keyframes wiggle { from { transform: rotate(-1.2deg); } to { transform: rotate(1.2deg); } }
+  .tile.add { background: transparent; border: 1.5px dashed var(--border); box-shadow: none; backdrop-filter: none; color: var(--muted); }
+  .tile.add .ico { background: transparent; border: 0; color: var(--muted); font-size: 26px; font-weight: 300; }
+
+  #bm-wrap { width: min(640px, 100%); border-radius: var(--radius); padding: 14px 10px 10px; color: var(--text); }
+  .bm-head { display: flex; align-items: center; gap: 9px; margin: 0 8px 10px; min-height: 30px; }
+  .bm-head > svg { width: 16px; height: 16px; color: var(--accent); flex: none; }
+  .bm-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  #bm-count { font-size: 11.5px; font-weight: 600; color: var(--accent); background: var(--accent-soft); padding: 1px 8px; border-radius: 10px; }
+  #bm-filter {
+    margin-left: auto; height: 30px; width: min(200px, 45%); padding: 0 12px; border-radius: 15px;
+    border: 1px solid var(--border); background: var(--hover); color: var(--text); font: inherit; font-size: 13px; outline: none;
+  }
+  #bm-filter:focus { border-color: var(--accent); }
+  #bm-filter::placeholder { color: var(--muted); }
+  #bm {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 2px 6px;
+    max-height: 36vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  }
+  .bm {
+    display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 10px; border-radius: var(--radius-sm);
+    color: var(--text); text-decoration: none; transition: background .15s, opacity .18s, transform .18s;
+  }
+  .bm:hover, .bm:focus-visible { background: var(--hover); outline: none; }
+  .bm.gone { opacity: 0; transform: scale(.97); }
+  .bm .ic {
+    width: 34px; height: 34px; border-radius: 10px; flex: none; display: grid; place-items: center; overflow: hidden;
+    background: var(--card-solid); border: 1px solid var(--border); color: var(--accent); font-weight: 600; font-size: 14px;
+    transition: transform .15s;
+  }
+  .bm:hover .ic { transform: scale(1.06); }
+  .bm .ic:has(img) { background: #f4f5f8; border-color: transparent; }
+  .bm .ic img { width: 20px; height: 20px; }
+  .bm .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .bm .t, .bm .d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bm .t { font-size: 13.5px; font-weight: 500; }
+  .bm .d { color: var(--muted); font-size: 12px; }
+  .bm .x {
+    flex: none; width: 26px; height: 26px; border: 0; border-radius: 50%; background: none; color: var(--muted);
+    display: grid; place-items: center; cursor: pointer; opacity: 0; transition: opacity .15s, background .15s, color .15s;
+  }
+  .bm:hover .x, .bm .x:focus-visible { opacity: 1; }
+  .bm .x:hover { background: rgba(229,72,77,.14); color: #e5484d; }
+  .bm .x svg { width: 12px; height: 12px; }
+  #bm-empty { margin: 2px 8px 6px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+  kbd { font: inherit; font-size: 11.5px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--hover); color: var(--text); }
+
+  /* Settings */
+  #gear {
+    position: fixed; right: 20px; bottom: 20px; width: 44px; height: 44px; border-radius: 50%;
+    color: var(--text); cursor: pointer; display: grid; place-items: center; transition: transform .25s;
+  }
+  #gear:hover { transform: rotate(40deg); }
+  #gear svg { width: 20px; height: 20px; }
+  #panel {
+    position: fixed; right: 20px; bottom: 76px; width: 320px; max-height: calc(100vh - 110px); overflow-y: auto;
+    padding: 18px; border-radius: 20px; display: flex; flex-direction: column; gap: 14px; font-size: 13.5px;
+    background: var(--card-solid); opacity: 0; transform: translateY(8px) scale(.98); pointer-events: none;
+    transition: opacity .16s, transform .16s;
+  }
+  #panel.open { opacity: 1; transform: none; pointer-events: auto; }
+  #panel h3 { margin: 0; font-size: 16px; font-weight: 600; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field > span { font-size: 12px; color: var(--muted); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  input[type=text], select {
+    height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--hover); color: var(--text); font: inherit; outline: none;
+  }
+  input[type=text]:focus, select:focus { border-color: var(--accent); }
+  select option { background: var(--card-solid); color: var(--text); }
+  .swatches { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .sw { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; outline-offset: 2px; }
+  .sw.on { outline: 2px solid var(--text); }
+  .sw.custom { background: conic-gradient(#f66, #fd5, #5d8, #5bf, #a7f, #f66); position: relative; overflow: hidden; }
+  .sw.custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .switch { position: relative; width: 38px; height: 22px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .switch span { position: absolute; inset: 0; border-radius: 11px; background: var(--border); cursor: pointer; transition: background .15s; }
+  .switch span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(16px); }
+  .btn {
+    height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--hover);
+    color: var(--text); font: inherit; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.ghost { background: none; color: var(--muted); }
+  .btns { display: flex; gap: 8px; }
+  .btns .btn { flex: 1; }
+
+  /* Add-shortcut dialog */
+  dialog { border: 0; padding: 0; background: none; color: var(--text); }
+  dialog::backdrop { background: rgba(0,0,0,.35); backdrop-filter: blur(3px); }
+  dialog form.card { width: 340px; padding: 20px; border-radius: 20px; display: flex; flex-direction: column; gap: 12px; background: var(--card-solid); border: 1px solid var(--border); box-shadow: var(--shadow); }
+  dialog h3 { margin: 0 0 2px; font-size: 16px; }
+</style>
+</head>
+<body>
+  <div id="bgimg" hidden></div>
+  <header>
+    <div id="clock"></div>
+    <div id="greet"></div>
+  </header>
+
+  <form id="search" autocomplete="off">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="q" class="glass" type="text" placeholder="Search the web or type an address" autofocus>
+  </form>
+
+  <div id="links"></div>
+
+  <section id="bm-wrap" class="glass">
+    <div class="bm-head">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 3.5A1.5 1.5 0 0 1 7.5 2h9A1.5 1.5 0 0 1 18 3.5V21l-6-4-6 4z"/></svg>
+      <h2>Bookmarks</h2><span id="bm-count" hidden></span>
+      <input id="bm-filter" type="text" placeholder="Filter bookmarks" autocomplete="off" hidden>
+    </div>
+    <div id="bm"></div>
+    <div id="bm-empty" hidden></div>
+  </section>
+
+  <button id="gear" class="glass" title="Customize" aria-label="Customize">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
+
+  <div id="panel" class="glass">
+    <h3>Customize</h3>
+    <label class="field"><span>Your name</span><input type="text" id="s-name" placeholder="Optional"></label>
+    <div class="field"><span>Accent colour (whole browser)</span><div class="swatches" id="swatches"></div></div>
+    <label class="field"><span>Search engine</span>
+      <select id="s-engine">
+        <option value="https://duckduckgo.com/?q=">DuckDuckGo</option>
+        <option value="https://www.google.com/search?q=">Google</option>
+        <option value="https://www.bing.com/search?q=">Bing</option>
+        <option value="https://search.brave.com/search?q=">Brave Search</option>
+      </select>
+    </label>
+    <label class="field"><span>Background image URL</span><input type="text" id="s-bg" placeholder="https://… (empty for the soft gradient)"></label>
+    <div class="row">Show clock <label class="switch"><input type="checkbox" id="s-clock"><span></span></label></div>
+    <div class="row">Reopen tabs on start <label class="switch"><input type="checkbox" id="s-restore"><span></span></label></div>
+    <div class="row">Show bookmarks bar <label class="switch"><input type="checkbox" id="s-bmbar"><span></span></label></div>
+    <div class="btns"><button class="btn" id="edit">Edit shortcuts</button><button class="btn ghost" id="reset">Reset</button></div>
+  </div>
+
+  <dialog id="add">
+    <form class="card" method="dialog" id="add-form">
+      <h3>Add shortcut</h3>
+      <label class="field"><span>Name</span><input type="text" id="a-name" required></label>
+      <label class="field"><span>Address</span><input type="text" id="a-url" placeholder="example.com" required></label>
+      <div class="btns"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ok">Add</button></div>
+    </form>
+  </dialog>
+
+<script>
+(() => {
+  const KEY = 'lb-start-v1';
+  const ACCENTS = ['#5b7cfa', '#8b5cf6', '#ec4899', '#f97316', '#10b981', '#06b6d4'];
+  const DEFAULTS = {
+    name: '', bg: '', clock: true,
+    links: [
+      { name: 'YouTube', url: 'https://www.youtube.com' },
+      { name: 'GitHub', url: 'https://github.com' },
+      { name: 'Wikipedia', url: 'https://wikipedia.org' },
+      { name: 'Reddit', url: 'https://www.reddit.com' },
+    ],
+  };
+  let s;
+  try { s = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (_) { s = { ...DEFAULTS }; }
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (_) {} };
+  const $ = id => document.getElementById(id);
+  const post = m => { try { window.ipc.postMessage(m); } catch (_) {} };
+  const browser = { engine: 'https://duckduckgo.com/?q=', restore_session: true, accent: ACCENTS[0], show_bookmarks_bar: true };
+
+  const hostOf = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (_) { return ''; } };
+  // Site icon (fetched from DuckDuckGo's icon service), falling back to the first letter.
+  function siteIcon(url, fallbackText, cls) {
+    const host = hostOf(url);
+    const letter = document.createElement('div');
+    letter.className = cls || '';
+    letter.textContent = (fallbackText || host || '?')[0].toUpperCase();
+    if (!host) return letter;
+    const img = document.createElement('img');
+    img.alt = ''; img.referrerPolicy = 'no-referrer';
+    img.src = `https://icons.duckduckgo.com/ip3/${host}.ico`;
+    img.onerror = () => img.replaceWith(letter);
+    return img;
+  }
+
+  function applyLook() {
+    const bg = (s.bg || '').trim();
+    $('bgimg').hidden = !bg;
+    $('bgimg').style.backgroundImage = bg ? `url("${bg.replace(/"/g, '%22')}")` : '';
+    document.body.classList.toggle('has-bg', !!bg);
+  }
+  function tick() {
+    const d = new Date(), h = d.getHours();
+    $('clock').style.display = s.clock ? '' : 'none';
+    $('clock').textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const part = h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+    $('greet').textContent = s.name ? `${part}, ${s.name}` : part;
+  }
+  function normalize(u) { u = u.trim(); return /^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? u : 'https://' + u; }
+
+  function renderLinks() {
+    const box = $('links'); box.textContent = '';
+    s.links.forEach((l, i) => {
+      const a = document.createElement('a'); a.className = 'tile glass'; a.href = l.url; a.title = l.url;
+      const ico = document.createElement('div'); ico.className = 'ico'; ico.append(siteIcon(l.url, l.name));
+      const nm = document.createElement('div'); nm.className = 'name'; nm.textContent = l.name;
+      const x = document.createElement('button'); x.className = 'x'; x.textContent = '×'; x.title = 'Remove';
+      x.onclick = e => { e.preventDefault(); e.stopPropagation(); s.links.splice(i, 1); save(); renderLinks(); };
+      a.append(ico, nm, x);
+      a.onclick = e => { if (document.body.classList.contains('editing')) e.preventDefault(); };
+      box.append(a);
+    });
+    const add = document.createElement('button'); add.className = 'tile add'; add.title = 'Add shortcut';
+    const plus = document.createElement('div'); plus.className = 'ico'; plus.textContent = '+';
+    const lbl = document.createElement('div'); lbl.className = 'name'; lbl.textContent = 'Add';
+    add.append(plus, lbl);
+    add.onclick = () => { $('add-form').reset(); $('add').showModal(); $('a-name').focus(); };
+    box.append(add);
+  }
+  $('a-url').addEventListener('input', () => {
+    if (!$('a-name').value) $('a-name').placeholder = hostOf(normalize($('a-url').value)).split('.')[0] || '';
+  });
+  $('add').addEventListener('close', () => {
+    if ($('add').returnValue !== 'ok') return;
+    const url = normalize($('a-url').value);
+    const name = $('a-name').value.trim() || hostOf(url);
+    if (!$('a-url').value.trim()) return;
+    s.links.push({ name, url }); save(); renderLinks();
+  });
+
+  function renderSwatches() {
+    const box = $('swatches'); box.textContent = '';
+    const current = (browser.accent || '').toLowerCase();
+    for (const c of ACCENTS) {
+      const b = document.createElement('button'); b.className = 'sw' + (c === current ? ' on' : '');
+      b.style.background = c; b.title = c; b.onclick = () => setAccent(c);
+      box.append(b);
+    }
+    const custom = document.createElement('label'); custom.className = 'sw custom' + (ACCENTS.includes(current) ? '' : ' on');
+    custom.title = 'Custom colour';
+    const input = document.createElement('input'); input.type = 'color'; input.value = current || ACCENTS[0];
+    input.oninput = () => setAccent(input.value);
+    custom.append(input); box.append(custom);
+  }
+  function setAccent(c) {
+    browser.accent = c.toLowerCase();
+    post('set:accent:' + browser.accent);
+    document.documentElement.style.setProperty('--accent', browser.accent);
+    renderSwatches();
+  }
+
+  function loadPanel() {
+    $('s-name').value = s.name; $('s-bg').value = s.bg; $('s-clock').checked = s.clock;
+    $('s-engine').value = browser.engine; $('s-restore').checked = browser.restore_session;
+    $('s-bmbar').checked = browser.show_bookmarks_bar;
+    renderSwatches();
+  }
+  const bind = (id, key, ev = 'input', get = el => el.value) => $(id).addEventListener(ev, e => {
+    s[key] = get(e.target); save(); applyLook(); tick();
+  });
+  bind('s-name', 'name'); bind('s-bg', 'bg', 'change'); bind('s-clock', 'clock', 'change', el => el.checked);
+  $('s-engine').addEventListener('change', e => { browser.engine = e.target.value; post('set:engine:' + browser.engine); });
+  $('s-restore').addEventListener('change', e => post('set:restore:' + (e.target.checked ? 1 : 0)));
+  $('s-bmbar').addEventListener('change', e => post('set:bmbar:' + (e.target.checked ? 1 : 0)));
+
+  $('gear').onclick = e => { e.stopPropagation(); $('panel').classList.toggle('open'); };
+  document.addEventListener('click', e => {
+    if (!$('panel').contains(e.target) && e.target !== $('gear')) $('panel').classList.remove('open');
+  });
+  $('edit').onclick = () => {
+    const on = document.body.classList.toggle('editing');
+    $('edit').textContent = on ? 'Done' : 'Edit shortcuts';
+  };
+  $('reset').onclick = () => {
+    if (!confirm('Reset the start page to its defaults?')) return;
+    s = JSON.parse(JSON.stringify(DEFAULTS)); save();
+    browser.engine = DEFAULTS_ENGINE; post('set:engine:' + DEFAULTS_ENGINE);
+    setAccent(ACCENTS[0]);
+    loadPanel(); applyLook(); tick(); renderLinks();
+  };
+  const DEFAULTS_ENGINE = 'https://duckduckgo.com/?q=';
+
+  $('search').onsubmit = e => {
+    e.preventDefault();
+    const v = $('q').value.trim(); if (!v) return;
+    const looksUrl = !/\s/.test(v) && /^[^/?#]+\.[^/?#]+/.test(v);
+    location.href = /^https?:\/\//i.test(v) ? v : looksUrl ? 'https://' + v : browser.engine + encodeURIComponent(v);
+  };
+  document.addEventListener('keydown', e => {
+    if (e.key === '/' && document.activeElement !== $('q') && !(document.activeElement instanceof HTMLInputElement)) {
+      e.preventDefault(); $('q').focus();
+    }
+    if (e.key === 'Escape') $('panel').classList.remove('open');
+  });
+
+  async function loadBrowserSettings() {
+    try { Object.assign(browser, await (await fetch('/api/settings')).json()); } catch (_) {}
+    loadPanel();
+  }
+  // Bookmarks: a filterable two-column list; the filter appears once the list gets long.
+  const X_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+  let bookmarks = [];
+  async function loadBookmarks() {
+    try { bookmarks = await (await fetch('/api/bookmarks')).json(); } catch (_) { bookmarks = []; }
+    renderBookmarks();
+  }
+  function renderBookmarks() {
+    const n = bookmarks.length;
+    $('bm-count').hidden = !n; $('bm-count').textContent = n;
+    $('bm-filter').hidden = n <= 8;
+    const q = n > 8 ? $('bm-filter').value.trim().toLowerCase() : '';
+    const shown = q ? bookmarks.filter(b => ((b.title || '') + ' ' + b.url).toLowerCase().includes(q)) : bookmarks;
+    const box = $('bm'); box.textContent = '';
+    for (const b of shown) {
+      const a = document.createElement('a'); a.className = 'bm'; a.href = b.url; a.title = b.url;
+      const ic = document.createElement('div'); ic.className = 'ic'; ic.append(siteIcon(b.url, b.title));
+      const txt = document.createElement('div'); txt.className = 'txt';
+      const t = document.createElement('div'); t.className = 't'; t.textContent = b.title || hostOf(b.url) || b.url;
+      const d = document.createElement('div'); d.className = 'd'; d.textContent = hostOf(b.url) || b.url;
+      txt.append(t, d);
+      const x = document.createElement('button'); x.className = 'x'; x.innerHTML = X_ICON; x.title = 'Remove bookmark';
+      x.onclick = e => {
+        e.preventDefault(); e.stopPropagation();
+        a.classList.add('gone');
+        setTimeout(() => post('bm:remove:' + b.url), 180); // the browser then refreshes this page's list
+      };
+      a.append(ic, txt, x); box.append(a);
+    }
+    const empty = $('bm-empty');
+    empty.hidden = shown.length > 0;
+    if (!n) empty.innerHTML = 'No bookmarks yet. Press <kbd>Ctrl</kbd> + <kbd>D</kbd> or click the ☆ in the address bar to save a page.';
+    else if (!shown.length) empty.textContent = 'No bookmarks match your filter.';
+  }
+  $('bm-filter').addEventListener('input', renderBookmarks);
+  $('bm-filter').addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.stopPropagation(); $('bm-filter').value = ''; renderBookmarks(); }
+  });
+  window.__lbRefresh = loadBookmarks;
+
+  applyLook(); tick(); renderLinks(); loadPanel(); loadBrowserSettings(); loadBookmarks();
+  setInterval(tick, 10000);
+})();
+</script>
+</body>
+</html>

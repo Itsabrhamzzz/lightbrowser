@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Extensions</title>
+<link rel="stylesheet" href="/theme.css">
+<link rel="icon" href="/favicon.png">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body { font-family: var(--font); color: var(--text); background: var(--bg); }
+  body::before {
+    content: ""; position: fixed; inset: -20%; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(40% 30% at 80% 0%, var(--accent-soft), transparent 70%),
+      linear-gradient(180deg, var(--bg-2), var(--bg));
+  }
+  main { max-width: 780px; margin: 0 auto; padding: 44px 24px 70px; }
+  .glass {
+    background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow);
+    backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  }
+  .head { display: flex; align-items: center; gap: 14px; margin-bottom: 26px; }
+  .head .badge { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .head .badge svg { width: 24px; height: 24px; }
+  h1 { font-size: 26px; font-weight: 600; margin: 0; letter-spacing: -.3px; }
+  .sub { color: var(--muted); font-size: 13.5px; margin: 2px 0 0; }
+
+  .install { border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; }
+  input[type=text] {
+    flex: 1; min-width: 220px; height: 42px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--border);
+    background: var(--hover); color: var(--text); font: inherit; outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  input[type=text]::placeholder { color: var(--muted); }
+  input[type=text]:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  button {
+    height: 42px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--hover);
+    color: var(--text); font: inherit; font-size: 13.5px; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); }
+  .links { display: flex; gap: 6px; flex-wrap: wrap; }
+  .links button { height: 32px; padding: 0 12px; font-size: 12.5px; background: none; color: var(--muted); }
+  .links button:hover { color: var(--text); }
+
+  #status { min-height: 22px; font-size: 13px; color: var(--muted); margin: 0 4px 16px; display: flex; align-items: center; gap: 8px; }
+  #status.busy::before { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: spin .8s linear infinite; }
+  #status.err { color: #e5484d; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .list { display: flex; flex-direction: column; gap: 10px; }
+  .ext { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: var(--radius); transition: opacity .2s; }
+  .ext.off { opacity: .55; }
+  .ico { width: 42px; height: 42px; border-radius: 12px; background: var(--card-solid); border: 1px solid var(--border); display: grid; place-items: center; font-weight: 700; color: var(--accent); flex: none; overflow: hidden; }
+  .ico img { width: 30px; height: 30px; }
+  .info { flex: 1; min-width: 0; }
+  .name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .id { font-size: 11.5px; color: var(--muted); font-family: "Cascadia Mono", Consolas, monospace; margin-top: 2px; }
+  .actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+  .actions button { height: 32px; padding: 0 11px; font-size: 12.5px; border-color: transparent; background: none; color: var(--muted); }
+  .actions button:hover { background: var(--hover); color: var(--text); }
+  .actions button.danger:hover { color: #e5484d; }
+  .switch { position: relative; width: 40px; height: 24px; flex: none; margin-left: 4px; }
+  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .switch span { position: absolute; inset: 0; border-radius: 12px; background: var(--border); cursor: pointer; transition: background .15s; }
+  .switch span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(16px); }
+
+  .tools { display: flex; align-items: center; gap: 10px; margin: 0 2px 12px; }
+  .tools .count { color: var(--muted); font-size: 12.5px; flex: none; }
+  #search { height: 36px; flex: 1; min-width: 0; }
+  .ext { align-items: flex-start; }
+  .ext .ico { margin-top: 2px; }
+  .title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .ver { font-size: 11.5px; color: var(--muted); flex: none; }
+  .desc { font-size: 13px; color: var(--muted); margin-top: 3px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+  .chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--hover); color: var(--muted); border: 1px solid var(--border); }
+  .chip.warn { color: #d9822b; border-color: color-mix(in srgb, #d9822b 40%, transparent); }
+  .side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: none; }
+  .actions { max-width: 330px; }
+  .actions button.on { color: var(--accent); }
+  .nomatch { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
+  .empty { padding: 40px 20px; text-align: center; color: var(--muted); border-radius: var(--radius); border: 1.5px dashed var(--border); }
+  .empty svg { width: 46px; height: 46px; color: var(--accent); opacity: .7; margin-bottom: 8px; }
+  .empty b { display: block; color: var(--text); font-size: 15px; margin-bottom: 4px; }
+
+  details.help { margin-top: 26px; border-radius: var(--radius); padding: 4px 16px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+  details.help summary { cursor: pointer; padding: 10px 0; color: var(--text); font-weight: 600; list-style: none; }
+  details.help summary::-webkit-details-marker { display: none; }
+  details.help summary::after { content: "＋"; float: right; color: var(--muted); }
+  details.help[open] summary::after { content: "－"; }
+  details.help p { margin: 0 0 12px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="head">
+    <div class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 4.5a2 2 0 1 1 4 0V6h3.5a1.5 1.5 0 0 1 1.5 1.5V11h1.5a2 2 0 1 1 0 4H18v3.5a1.5 1.5 0 0 1-1.5 1.5H13v-1.5a2 2 0 1 0-4 0V20H5.5A1.5 1.5 0 0 1 4 18.5V15h1.5a2 2 0 1 0 0-4H4V7.5A1.5 1.5 0 0 1 5.5 6H9z"/></svg></div>
+    <div><h1>Extensions</h1><p class="sub">Chrome extensions, running in LightBrowser.</p></div>
+  </div>
+
+  <section class="install glass">
+    <form class="bar" id="install">
+      <input type="text" id="url" placeholder="Paste a Chrome Web Store link or extension ID" autocomplete="off">
+      <button class="primary" type="submit">Install</button>
+    </form>
+    <div class="links">
+      <button id="store" type="button">Browse Chrome Web Store ↗</button>
+      <button id="folder" type="button">Open extensions folder</button>
+      <button id="reload" type="button">Load unpacked folders</button>
+    </div>
+  </section>
+  <div id="status"></div>
+
+  <div class="tools" id="tools" hidden>
+    <input type="text" id="search" placeholder="Search extensions" autocomplete="off">
+    <span class="count" id="count"></span>
+  </div>
+  <div class="list" id="list"></div>
+
+  <details class="help glass">
+    <summary>How extensions work here</summary>
+    <p><b>Unpacked extensions:</b> copy each one into its own folder inside the extensions folder, then press <i>Load unpacked folders</i>.</p>
+    <p><b>Popups &amp; options:</b> extensions can't add toolbar buttons here, so their popup and options pages open in a tab from the buttons on each card.</p>
+    <p><b>Compatibility:</b> Manifest V3 extensions work best. Older Manifest V2 extensions (like the original uBlock Origin) may not load — try their "Lite" / MV3 versions.</p>
+  </details>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const send = m => window.ipc.postMessage(m);
+  const status = (msg, kind) => { $('status').textContent = msg || ''; $('status').className = kind || ''; };
+
+  let lastData = { items: [] };
+  window.__lbExtRender = data => {
+    status(data.status, data.error ? 'err' : /…$/.test(data.status || '') ? 'busy' : '');
+    lastData = data;
+    render();
+  };
+  $('search').addEventListener('input', () => render());
+
+  function render() {
+    const data = lastData;
+    const box = $('list');
+    box.textContent = '';
+    $('tools').hidden = !data.items.length;
+    if (!data.items.length) {
+      const e = document.createElement('div');
+      e.className = 'empty';
+      e.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M9 4.5a2 2 0 1 1 4 0V6h3.5a1.5 1.5 0 0 1 1.5 1.5V11h1.5a2 2 0 1 1 0 4H18v3.5a1.5 1.5 0 0 1-1.5 1.5H13v-1.5a2 2 0 1 0-4 0V20H5.5A1.5 1.5 0 0 1 4 18.5V15h1.5a2 2 0 1 0 0-4H4V7.5A1.5 1.5 0 0 1 5.5 6H9z"/></svg>';
+      const b = document.createElement('b'); b.textContent = 'No extensions yet';
+      const t = document.createElement('div'); t.textContent = 'Install one from the Chrome Web Store above.';
+      e.append(b, t);
+      box.append(e);
+      return;
+    }
+    const q = $('search').value.trim().toLowerCase();
+    const items = data.items.filter(x => !q || (x.name + ' ' + (x.description || '')).toLowerCase().includes(q));
+    const on = data.items.filter(x => x.enabled).length;
+    $('count').textContent = data.items.length + ' installed · ' + on + ' on';
+    if (!items.length) {
+      const n = document.createElement('div'); n.className = 'nomatch'; n.textContent = 'No extensions match your search.';
+      box.append(n);
+      return;
+    }
+    for (const x of items) {
+      const row = document.createElement('div');
+      row.className = 'ext glass' + (x.enabled ? '' : ' off');
+      const ico = document.createElement('div'); ico.className = 'ico';
+      const letter = () => { ico.textContent = (x.name[0] || '?').toUpperCase(); };
+      if (x.icon) {
+        const img = document.createElement('img'); img.alt = ''; img.src = x.icon; img.onerror = letter; ico.append(img);
+      } else letter();
+
+      const info = document.createElement('div'); info.className = 'info';
+      const title = document.createElement('div'); title.className = 'title';
+      const nm = document.createElement('div'); nm.className = 'name'; nm.textContent = x.name;
+      title.append(nm);
+      if (x.version) { const v = document.createElement('span'); v.className = 'ver'; v.textContent = 'v' + x.version; title.append(v); }
+      info.append(title);
+      if (x.description) { const d = document.createElement('div'); d.className = 'desc'; d.textContent = x.description; info.append(d); }
+      if (x.permissions && x.permissions.length) {
+        const chips = document.createElement('div'); chips.className = 'chips';
+        const shown = x.permissions.slice(0, 6);
+        for (const p of shown) {
+          const c = document.createElement('span'); c.className = 'chip' + (p === 'All websites' ? ' warn' : ''); c.textContent = p;
+          if (p === 'All websites') c.title = 'Can read and change data on every website you visit';
+          chips.append(c);
+        }
+        if (x.permissions.length > shown.length) {
+          const c = document.createElement('span'); c.className = 'chip'; c.textContent = '+' + (x.permissions.length - shown.length);
+          c.title = x.permissions.slice(shown.length).join(', ');
+          chips.append(c);
+        }
+        info.append(chips);
+      }
+      const id = document.createElement('div'); id.className = 'id'; id.textContent = x.id; info.append(id);
+
+      const side = document.createElement('div'); side.className = 'side';
+      const act = document.createElement('div'); act.className = 'actions';
+      const btn = (label, fn, cls, tip) => { const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; if (tip) b.title = tip; b.onclick = fn; act.append(b); return b; };
+      if (x.popup && x.enabled) btn('Open', () => send('ext:popup:' + x.id), '', 'Open its popup under the toolbar');
+      if (x.options) btn('Options', () => send('ext:open:chrome-extension://' + x.id + '/' + x.options.replace(/^\//, '')));
+      btn(x.pinned ? 'Pinned' : 'Pin', () => send('ext:pin:' + x.id + ':' + (x.pinned ? 0 : 1)), x.pinned ? 'on' : '', x.pinned ? 'Unpin from the toolbar' : 'Show in the toolbar');
+      if (x.store_id) {
+        btn('Update', () => { status('Updating ' + x.name + '…', 'busy'); send('ext:update:' + x.id); }, '', 'Download the latest version from the Chrome Web Store');
+        btn('Store page', () => window.open('https://chromewebstore.google.com/detail/' + x.store_id), '', 'Open in the Chrome Web Store');
+      }
+      btn('Remove', () => { if (confirm('Remove "' + x.name + '"?')) send('ext:remove:' + x.id); }, 'danger');
+      const sw = document.createElement('label'); sw.className = 'switch'; sw.title = x.enabled ? 'Turn off' : 'Turn on';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = x.enabled;
+      cb.onchange = () => send('ext:toggle:' + x.id + ':' + (cb.checked ? 1 : 0));
+      sw.append(cb, document.createElement('span'));
+      side.append(sw, act);
+      row.append(ico, info, side);
+      box.append(row);
+    }
+  }
+
+  $('install').onsubmit = e => {
+    e.preventDefault();
+    const v = $('url').value.trim();
+    if (!v) return;
+    status('Downloading…', 'busy');
+    send('ext:install:' + v);
+    $('url').value = '';
+  };
+  $('folder').onclick = () => send('ext:folder');
+  $('reload').onclick = () => { status('Loading folders…', 'busy'); send('ext:reload'); };
+  $('store').onclick = () => { location.href = 'https://chromewebstore.google.com/category/extensions'; };
+  send('ext:list');
+})();
+</script>
+</body>
+</html>

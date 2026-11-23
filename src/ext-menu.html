@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Extensions</title>
+<link rel="stylesheet" href="/theme.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    width: 320px; font-family: var(--font); color: var(--text); background: var(--card-solid);
+    border: 1px solid var(--border); border-radius: 12px; overflow: hidden; user-select: none;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px; }
+  header b { font-size: 14px; font-weight: 600; }
+  .iconbtn { width: 28px; height: 28px; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; display: grid; place-items: center; }
+  .iconbtn:hover { background: var(--hover); color: var(--text); }
+  .iconbtn svg { width: 16px; height: 16px; }
+  #list { max-height: 360px; overflow-y: auto; padding: 0 6px 6px; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 10px; cursor: pointer; }
+  .row:hover { background: var(--hover); }
+  .row.off { opacity: .5; }
+  .ico { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; flex: none; overflow: hidden; font-size: 12px; font-weight: 700; color: var(--accent); background: var(--accent-soft); }
+  .ico img { width: 22px; height: 22px; }
+  .name { flex: 1; min-width: 0; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pin { opacity: 0; }
+  .row:hover .pin, .pin.on { opacity: 1; }
+  .pin.on { color: var(--accent); }
+  .empty { padding: 18px 16px 20px; text-align: center; color: var(--muted); font-size: 13px; }
+  .empty button { margin-top: 10px; }
+  footer { border-top: 1px solid var(--border); padding: 6px; }
+  .link { width: 100%; height: 34px; border: 0; border-radius: 9px; background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; padding: 0 10px; cursor: pointer; display: flex; align-items: center; gap: 10px; }
+  .link:hover { background: var(--hover); }
+  .link svg { width: 16px; height: 16px; color: var(--muted); }
+  .primary { height: 32px; padding: 0 14px; border: 0; border-radius: 9px; background: var(--accent); color: #fff; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+</style>
+</head>
+<body>
+  <header><b>Extensions</b>
+    <button class="iconbtn" id="manage-top" title="Manage extensions">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>
+    </button>
+  </header>
+  <div id="list"></div>
+  <footer>
+    <button class="link" id="manage">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 4.5a2 2 0 1 1 4 0V6h3.5a1.5 1.5 0 0 1 1.5 1.5V11h1.5a2 2 0 1 1 0 4H18v3.5a1.5 1.5 0 0 1-1.5 1.5H13v-1.5a2 2 0 1 0-4 0V20H5.5A1.5 1.5 0 0 1 4 18.5V15h1.5a2 2 0 1 0 0-4H4V7.5A1.5 1.5 0 0 1 5.5 6H9z"/></svg>
+      Manage extensions
+    </button>
+  </footer>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const send = m => window.ipc.postMessage(m);
+  const PIN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6"/></svg>';
+  const PIN_ON = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6" fill="none"/></svg>';
+
+  window.__lbExtRender = data => {
+    const box = $('list');
+    box.textContent = '';
+    if (!data.items.length) {
+      const e = document.createElement('div'); e.className = 'empty';
+      e.textContent = 'No extensions installed yet.';
+      const b = document.createElement('button'); b.className = 'primary'; b.textContent = 'Get extensions';
+      b.onclick = () => send('ext:manage');
+      e.append(document.createElement('br'), b);
+      box.append(e);
+      return;
+    }
+    for (const x of data.items) {
+      const row = document.createElement('div'); row.className = 'row' + (x.enabled ? '' : ' off');
+      row.title = x.popup ? 'Open ' + x.name : x.name;
+      const ico = document.createElement('div'); ico.className = 'ico';
+      const letter = () => { ico.textContent = (x.name[0] || '?').toUpperCase(); };
+      if (x.icon) { const img = document.createElement('img'); img.src = x.icon; img.alt = ''; img.onerror = letter; ico.append(img); } else letter();
+      const nm = document.createElement('div'); nm.className = 'name'; nm.textContent = x.name;
+      const pin = document.createElement('button'); pin.className = 'iconbtn pin' + (x.pinned ? ' on' : '');
+      pin.title = x.pinned ? 'Unpin from toolbar' : 'Pin to toolbar';
+      pin.innerHTML = x.pinned ? PIN_ON : PIN;
+      pin.onclick = e => { e.stopPropagation(); send('ext:pin:' + x.id + ':' + (x.pinned ? 0 : 1)); };
+      row.onclick = () => {
+        if (!x.enabled) return send('ext:toggle:' + x.id + ':1');
+        if (x.popup) send('ext:popup:' + x.id);
+        else if (x.options) send('ext:open:chrome-extension://' + x.id + '/' + x.options.replace(/^\//, ''));
+        else send('ext:manage');
+      };
+      row.append(ico, nm, pin);
+      box.append(row);
+    }
+  };
+  $('manage').onclick = $('manage-top').onclick = () => send('ext:manage');
+  send('ext:list');
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downloads</title>
+<link rel="stylesheet" href="/theme.css">
+<link rel="icon" href="/favicon.png">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body { font-family: var(--font); color: var(--text); background: var(--bg); }
+  body::before {
+    content: ""; position: fixed; inset: -20%; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(40% 30% at 80% 0%, var(--accent-soft), transparent 70%),
+      linear-gradient(180deg, var(--bg-2), var(--bg));
+  }
+  main { max-width: 780px; margin: 0 auto; padding: 44px 24px 70px; }
+  .glass {
+    background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow);
+    backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  }
+  .head { display: flex; align-items: center; gap: 14px; margin-bottom: 26px; }
+  .head .badge { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); flex: none; }
+  .head .badge svg { width: 24px; height: 24px; }
+  h1 { font-size: 26px; font-weight: 600; margin: 0; letter-spacing: -.3px; }
+  .sub { color: var(--muted); font-size: 13.5px; margin: 2px 0 0; }
+
+  .tools { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+  input[type=text] {
+    flex: 1; min-width: 220px; height: 42px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--border);
+    background: var(--hover); color: var(--text); font: inherit; outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  input[type=text]::placeholder { color: var(--muted); }
+  input[type=text]:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  button {
+    height: 42px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--hover);
+    color: var(--text); font: inherit; font-size: 13.5px; cursor: pointer; transition: border-color .15s, background .15s, color .15s;
+  }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; border-color: var(--border); }
+
+  #list { border-radius: var(--radius); padding: 8px; }
+  #list[hidden] { display: none; }
+  .item { display: flex; align-items: center; gap: 14px; padding: 10px; border-radius: var(--radius-sm); }
+  .item:hover { background: var(--hover); }
+  .item .ic {
+    width: 40px; height: 40px; border-radius: 11px; flex: none; display: grid; place-items: center;
+    background: var(--accent-soft); color: var(--accent); font-size: 10.5px; font-weight: 700; letter-spacing: .03em;
+  }
+  .item.gone .ic, .item.failed .ic { background: var(--hover); color: var(--muted); }
+  .item .txt { flex: 1; min-width: 0; }
+  .item .name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item.gone .name { text-decoration: line-through; color: var(--muted); }
+  .item .meta { color: var(--muted); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item .meta .bad { color: #e5484d; }
+  .item .acts { display: flex; gap: 4px; flex: none; }
+  .item .acts button { height: 30px; padding: 0 10px; font-size: 12.5px; border-color: transparent; background: none; color: var(--accent); }
+  .item .acts button:hover { background: var(--accent-soft); }
+  .item .x {
+    flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted);
+    display: grid; place-items: center; opacity: 0;
+  }
+  .item:hover .x, .item .x:focus-visible { opacity: 1; }
+  .item .x:hover { background: rgba(229,72,77,.14); color: #e5484d; }
+  .item .x svg { width: 12px; height: 12px; }
+  .empty { padding: 40px 20px; text-align: center; color: var(--muted); border-radius: var(--radius); border: 1.5px dashed var(--border); }
+</style>
+</head>
+<body>
+<main>
+  <div class="head">
+    <div class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg></div>
+    <div><h1>Downloads</h1><p class="sub" id="sub">Files saved to your Downloads folder.</p></div>
+  </div>
+  <div class="tools">
+    <input type="text" id="q" placeholder="Search downloads" autocomplete="off">
+    <button id="folder">Open Downloads folder</button>
+    <button id="clear">Clear list</button>
+  </div>
+  <div id="list" class="glass" hidden></div>
+  <div id="empty" class="empty" hidden></div>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const send = m => { try { window.ipc.postMessage(m); } catch (_) {} };
+  const X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+  const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (_) { return ''; } };
+  let all = [];
+
+  function when(t) {
+    const d = new Date(t * 1000), now = new Date();
+    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (d.toDateString() === now.toDateString()) return 'Today, ' + time;
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    if (d.toDateString() === y.toDateString()) return 'Yesterday, ' + time;
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' }) + ', ' + time;
+  }
+  function ext(name) { const m = /\.([a-z0-9]{1,5})$/i.exec(name); return m ? m[1].toUpperCase() : 'FILE'; }
+
+  function render() {
+    const q = $('q').value.trim().toLowerCase();
+    const shown = q ? all.filter(d => (d.name + ' ' + d.url).toLowerCase().includes(q)) : all;
+    $('clear').disabled = !all.length;
+    $('sub').textContent = all.length ? `${all.length} download${all.length === 1 ? '' : 's'}.` : 'Files saved to your Downloads folder.';
+    const box = $('list'); box.textContent = '';
+    box.hidden = !shown.length;
+    $('empty').hidden = !!shown.length;
+    $('empty').textContent = q ? 'No downloads match your search.' : 'No downloads yet. Files you download will show up here.';
+    for (const d of shown) {
+      const row = document.createElement('div');
+      row.className = 'item' + (!d.ok ? ' failed' : !d.exists ? ' gone' : '');
+      const ic = document.createElement('div'); ic.className = 'ic'; ic.textContent = ext(d.name);
+      const txt = document.createElement('div'); txt.className = 'txt';
+      const nm = document.createElement('div'); nm.className = 'name'; nm.textContent = d.name; nm.title = d.path;
+      const meta = document.createElement('div'); meta.className = 'meta';
+      const parts = [when(d.time)];
+      if (host(d.url)) parts.push(host(d.url));
+      meta.textContent = parts.join(' · ');
+      if (!d.ok || !d.exists) {
+        const bad = document.createElement('span'); bad.className = 'bad';
+        bad.textContent = ' · ' + (!d.ok ? 'Failed' : 'Deleted');
+        meta.append(bad);
+      }
+      txt.append(nm, meta);
+      const acts = document.createElement('div'); acts.className = 'acts';
+      if (d.ok && d.exists) {
+        const open = document.createElement('button'); open.textContent = 'Open'; open.onclick = () => send('dl:open:' + d.i);
+        const show = document.createElement('button'); show.textContent = 'Show in folder'; show.onclick = () => send('dl:show:' + d.i);
+        acts.append(open, show);
+      }
+      const x = document.createElement('button'); x.className = 'x'; x.innerHTML = X; x.title = 'Remove from list';
+      x.onclick = () => send('dl:remove:' + d.i);
+      row.append(ic, txt, acts, x);
+      box.append(row);
+    }
+  }
+
+  async function load() {
+    try { all = await (await fetch('/api/downloads', { cache: 'no-store' })).json(); } catch (_) { all = []; }
+    render();
+  }
+  window.__lbRefresh = load;
+  $('q').addEventListener('input', render);
+  $('folder').onclick = () => send('dl:folder');
+  $('clear').onclick = () => send('dl:clear');
+  load();
+})();
+</script>
+</body>
+</html>
