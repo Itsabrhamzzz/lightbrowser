@@ -34,6 +34,7 @@
       if (k === 'p') a = 'pip';
       else if (k === 't') a = 'reopen';
       else if (k === 'b') a = 'bmbar';
+      else if (k === 's') a = 'split';
       else if (k === 'tab') a = 'prev';
     } else if (e.altKey && !e.ctrlKey && e.key === 'ArrowLeft') a = 'back';
     else if (e.altKey && !e.ctrlKey && e.key === 'ArrowRight') a = 'forward';

@@ -68,6 +68,8 @@ enum Action {
     History,
     Downloads,
     BookmarksBar,
+    /// Ctrl+Shift+S: split the current tab with a new tab, or end its split.
+    Split,
     DevTools,
     Print,
     Find,
@@ -100,6 +102,7 @@ impl Action {
             "downloads" => Self::Downloads,
             "devtools" => Self::DevTools,
             "bmbar" => Self::BookmarksBar,
+            "split" => Self::Split,
             "esc" => Self::Esc,
             "bookmark" => Self::Bookmark,
             "next" => Self::NextTab,
@@ -122,6 +125,8 @@ enum Ev {
     Zoom(u64, f64),
     /// (playing audio, muted)
     Audio(u64, bool, bool),
+    /// The tab's page got keyboard focus.
+    Focus(u64),
     FindCount(u64, i32, i32),
     NewTab(String),
     Act(Action),
@@ -212,7 +217,12 @@ struct BrowserApp {
     addr_focused: bool,
     address_id: egui::Id,
     find_id: egui::Id,
-    last_layout: Option<(f32, f32, f32)>,
+    /// What the webviews were last laid out for: window size, content top, and the split pairs.
+    last_layout: Option<(f32, f32, f32, Vec<(u64, u64, i32)>)>,
+    /// Split view pairs (see `split.rs`).
+    splits: Vec<split::Split>,
+    /// When the next opened tab arrives, pair it to the right of this tab.
+    split_next: Option<u64>,
     fullscreen: bool,
     saved_window: Option<(egui::Pos2, egui::Vec2)>,
     was_maximized: bool,
@@ -416,6 +426,8 @@ impl BrowserApp {
             address_id: egui::Id::unique("address"),
             find_id: egui::Id::unique("find"),
             last_layout: None,
+            splits: vec![],
+            split_next: None,
             fullscreen: false,
             saved_window: None,
             was_maximized: false,
@@ -553,6 +565,11 @@ impl BrowserApp {
                         s_ipc(Ev::LocalCmd(body.clone()));
                     }
                 } else if let Some(a) = shortcut_from_ipc(body, &token) {
+                    if a == Action::PageDown {
+                        // A click in this page also makes it the active side of a split (the focus
+                        // event covers clicks inside iframes, which don't send this).
+                        s_ipc(Ev::Focus(id));
+                    }
                     s_ipc(Ev::Act(a));
                 }
             })
@@ -584,6 +601,8 @@ impl BrowserApp {
         let s = send.clone();
         wv2::on_audio(&webview, move |a, m| s(Ev::Audio(id, a, m)));
         let s = send.clone();
+        wv2::on_focus(&webview, move || s(Ev::Focus(id)));
+        let s = send.clone();
         wv2::on_fullscreen(&webview, move |on| s(Ev::Act(Action::Fullscreen(on))));
         if !self.ext_loaded {
             self.ext_loaded = true;
@@ -607,6 +626,13 @@ impl BrowserApp {
             pinned: false,
         });
         self.active = self.tabs.len() - 1;
+        if let Some(left) = self.split_next.take() {
+            if let Some(li) = self.tabs.iter().position(|t| t.id == left) {
+                self.reposition(self.active, li + 1);
+                self.splits.push(split::Split { left, right: id, ratio: split::DEFAULT_RATIO });
+            }
+        }
+        self.show_active();
         self.after_switch();
     }
 
@@ -626,16 +652,113 @@ impl BrowserApp {
         if i >= self.tabs.len() || i == self.active {
             return;
         }
-        let _ = self.tabs[self.active].webview.set_visible(false);
-        let _ = self.tabs[i].webview.set_visible(true);
+        // The other side of the pair that's showing: just make it the active side.
+        let (id, cur) = (self.tabs[i].id, self.tabs[self.active].id);
+        if split::partner(&self.splits, cur) == Some(id) {
+            return self.focus_side(id);
+        }
         self.active = i;
+        self.show_active();
         self.after_switch();
+    }
+
+    /// Show the active tab — and its split partner, if it has one — and hide every other tab.
+    fn show_active(&self) {
+        let Some(cur) = self.tabs.get(self.active).map(|t| t.id) else { return };
+        let partner = split::partner(&self.splits, cur);
+        for t in &self.tabs {
+            let _ = t.webview.set_visible(t.id == cur || Some(t.id) == partner);
+        }
+    }
+
+    // ---- Split view --------------------------------------------------------------------------
+
+    /// The pair the active tab belongs to, if any.
+    fn shown_split(&self) -> Option<split::Split> {
+        let id = self.tabs.get(self.active)?.id;
+        split::find(&self.splits, id).map(|k| self.splits[k])
+    }
+
+    /// Where tab `id`'s page goes inside the page area: its pane if it's in a pair, else all of it.
+    fn pane_of(&self, id: u64, page: ERect) -> ERect {
+        match split::find(&self.splits, id).map(|k| self.splits[k]) {
+            Some(s) => {
+                let (l, r) = split::pane_rects(page, s.ratio);
+                if s.left == id { l } else { r }
+            }
+            None => page,
+        }
+    }
+
+    /// Pair the active tab (left) with tab `with` (moved next to it), or with a new tab.
+    fn start_split(&mut self, with: Option<usize>) {
+        let Some(cur) = self.tabs.get(self.active) else { return };
+        if cur.pinned || split::find(&self.splits, cur.id).is_some() {
+            return;
+        }
+        let cur_id = cur.id;
+        match with {
+            Some(i) => {
+                let Some(t) = self.tabs.get(i) else { return };
+                if i == self.active || t.pinned || split::find(&self.splits, t.id).is_some() {
+                    return;
+                }
+                let right = t.id;
+                // After removing `i`, the slot right after the current tab is `active + 1` if `i` was
+                // to its right, else `active` (the current tab shifted left by one).
+                let to = if i > self.active { self.active + 1 } else { self.active };
+                self.reposition(i, to);
+                self.splits.push(split::Split { left: cur_id, right, ratio: split::DEFAULT_RATIO });
+                self.show_active();
+            }
+            None => {
+                self.split_next = Some(cur_id);
+                self.pending.push(HOME.into());
+            }
+        }
+    }
+
+    /// Dissolve the pair containing `tab`; both tabs stay, the active one goes full width.
+    fn end_split(&mut self, tab: u64) {
+        if let Some(k) = split::find(&self.splits, tab) {
+            self.splits.remove(k);
+            self.show_active();
+        }
+    }
+
+    /// Swap a pair's two tabs (and keep each page's width).
+    fn swap_split(&mut self, tab: u64) {
+        let Some(k) = split::find(&self.splits, tab) else { return };
+        let s = self.splits[k];
+        let Some(li) = self.tabs.iter().position(|t| t.id == s.left) else { return };
+        let active_id = self.tabs[self.active].id;
+        self.tabs.swap(li, li + 1);
+        self.active = self.tabs.iter().position(|t| t.id == active_id).unwrap_or(self.active);
+        self.splits[k] = split::Split { left: s.right, right: s.left, ratio: 1.0 - s.ratio };
+    }
+
+    /// Make `tab` the active side of the pair on screen (the toolbar then acts on it).
+    fn focus_side(&mut self, tab: u64) {
+        let Some(s) = self.shown_split() else { return };
+        if (s.left != tab && s.right != tab) || self.tabs[self.active].id == tab {
+            return;
+        }
+        if let Some(i) = self.tabs.iter().position(|t| t.id == tab) {
+            self.active = i;
+            self.shown_url.clear();
+            if self.find.take().is_some() {
+                for t in &self.tabs {
+                    wv2::find_stop(&t.webview);
+                }
+            }
+        }
     }
 
     fn close(&mut self, i: usize) {
         if i >= self.tabs.len() {
             return;
         }
+        self.end_split(self.tabs[i].id);
         let url = self.tabs[i].url.clone();
         if !url.starts_with("http://lb.localhost") && url != "about:blank" {
             self.closed.push(url);
@@ -653,7 +776,7 @@ impl BrowserApp {
         if i < self.active || self.active >= self.tabs.len() {
             self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1);
         }
-        let _ = self.tabs[self.active].webview.set_visible(true);
+        self.show_active();
         if was_active {
             let _ = self.tabs[self.active].webview.focus();
         }
@@ -686,6 +809,9 @@ impl BrowserApp {
         if self.tabs.get(i).is_none_or(|t| t.pinned == on) {
             return;
         }
+        if on {
+            self.end_split(self.tabs[i].id);
+        }
         let n = self.pinned_count();
         self.tabs[i].pinned = on;
         self.reposition(i, if on { n } else { n - 1 });
@@ -697,11 +823,32 @@ impl BrowserApp {
         let id = t.id;
         let others = self.tabs.iter().filter(|o| o.id != id && !o.pinned).count();
         let right = self.tabs.iter().skip(i + 1).filter(|o| !o.pinned).count();
+        let cur = &self.tabs[self.active];
+        let cur_busy = cur.pinned || split::find(&self.splits, cur.id).is_some();
+        let (split_item, split_item2) = if split::find(&self.splits, id).is_some() {
+            (
+                serde_json::json!({ "label": "Swap sides", "cmd": format!("tab:swap:{id}") }),
+                serde_json::json!({ "label": "Close split view", "cmd": format!("tab:unsplit:{id}"), "hint": "Ctrl+Shift+S" }),
+            )
+        } else if i == self.active {
+            (
+                serde_json::json!({ "label": "Split view with new tab", "cmd": format!("tab:splitnew:{id}"), "hint": "Ctrl+Shift+S", "disabled": t.pinned }),
+                serde_json::Value::Null,
+            )
+        } else {
+            (
+                serde_json::json!({ "label": "Split view with current tab", "cmd": format!("tab:split:{id}"), "disabled": t.pinned || cur_busy }),
+                serde_json::Value::Null,
+            )
+        };
         let items = serde_json::json!([
             { "label": "Reload", "cmd": format!("tab:reload:{id}"), "hint": "Ctrl+R" },
             { "label": "Duplicate", "cmd": format!("tab:dup:{id}") },
             { "label": if t.pinned { "Unpin" } else { "Pin" }, "cmd": format!("tab:pin:{id}") },
             { "label": if t.muted { "Unmute tab" } else { "Mute tab" }, "cmd": format!("tab:mute:{id}") },
+            { "sep": true },
+            split_item,
+            split_item2,
             { "sep": true },
             { "label": "Close", "cmd": format!("tab:close:{id}"), "hint": "Ctrl+W" },
             { "label": "Close other tabs", "cmd": format!("tab:others:{id}"), "disabled": others == 0 },
@@ -709,6 +856,8 @@ impl BrowserApp {
             { "sep": true },
             { "label": "Reopen closed tab", "cmd": "tab:reopen:0", "hint": "Ctrl+Shift+T", "disabled": self.closed.is_empty() },
         ]);
+        // Drop the unused second split slot.
+        let items = serde_json::Value::Array(items.as_array().into_iter().flatten().filter(|v| !v.is_null()).cloned().collect());
         self.show_menu(&format!("tab:{id}"), Anchor::Left(x), items);
     }
 
@@ -730,6 +879,13 @@ impl BrowserApp {
                 self.set_pinned(i, on);
             }
             "mute" => wv2::set_muted(&self.tabs[i].webview, !self.tabs[i].muted),
+            "split" => self.start_split(Some(i)),
+            "splitnew" => {
+                self.select(i);
+                self.start_split(None);
+            }
+            "swap" => self.swap_split(id),
+            "unsplit" => self.end_split(id),
             "close" => self.close(i),
             "others" | "right" => {
                 // Pinned tabs stay; close by id since indices shift as tabs go.
@@ -838,6 +994,14 @@ impl BrowserApp {
             }
             Action::History => self.show_page(HISTORY_PAGE),
             Action::BookmarksBar => self.toggle_bookmarks_bar(),
+            Action::Split => {
+                let cur = self.tabs.get(self.active).map(|t| (t.id, t.pinned));
+                if let Some(s) = self.shown_split() {
+                    self.end_split(s.left);
+                } else if let Some((_, false)) = cur {
+                    self.start_split(None);
+                }
+            }
             Action::Downloads => self.show_page(DOWNLOADS_PAGE),
             Action::DevTools => {
                 if let Some(wv) = self.active_wv() {
@@ -1121,6 +1285,7 @@ impl BrowserApp {
                         tab.favicon = tex;
                     }
                 }
+                Ev::Focus(id) => self.focus_side(id),
                 Ev::Audio(id, a, m) => {
                     if let Some(tab) = tab_mut(&mut self.tabs, id) {
                         (tab.audible, tab.muted) = (a, m);
@@ -1828,6 +1993,8 @@ impl BrowserApp {
                 Action::PrevTab
             } else if c && s && k(Key::B) {
                 Action::BookmarksBar
+            } else if c && s && k(Key::S) {
+                Action::Split
             } else if c && s && k(Key::P) {
                 Action::Pip
             } else if c && k(Key::Tab) {
@@ -2309,19 +2476,20 @@ impl eframe::App for BrowserApp {
         }
 
         // Only touch the webviews when the layout actually changed.
-        let layout = (r.width(), r.height(), top);
-        if self.last_layout != Some(layout) {
-            if self.last_layout.is_some_and(|l| (l.0, l.1) != (layout.0, layout.1)) {
+        let pairs: Vec<(u64, u64, i32)> =
+            self.splits.iter().map(|s| (s.left, s.right, (s.ratio * 1000.0).round() as i32)).collect();
+        let layout = (r.width(), r.height(), top, pairs);
+        if self.last_layout.as_ref() != Some(&layout) {
+            if self.last_layout.as_ref().is_some_and(|l| (l.0, l.1) != (layout.0, layout.1)) {
                 self.close_panel(); // window resized
             }
             self.last_layout = Some(layout);
-            let b = Self::bounds(page);
             let ppp = ctx.pixels_per_point();
             let radius = if self.fullscreen { 0 } else { (PAGE_RADIUS * ppp).round() as i32 };
-            let (w, h) = ((page.width() * ppp).round() as i32, (page.height() * ppp).round() as i32);
             for t in &self.tabs {
-                let _ = t.webview.set_bounds(b);
-                wv2::round_corners(&t.webview, w, h, radius);
+                let rect = self.pane_of(t.id, page);
+                let _ = t.webview.set_bounds(Self::bounds(rect));
+                wv2::round_corners(&t.webview, (rect.width() * ppp).round() as i32, (rect.height() * ppp).round() as i32, radius);
             }
             ctx.request_repaint();
         }
