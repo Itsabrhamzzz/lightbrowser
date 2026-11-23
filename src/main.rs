@@ -127,6 +127,8 @@ enum Ev {
     Audio(u64, bool, bool),
     /// The tab's page got keyboard focus.
     Focus(u64),
+    /// The tab's page entered / left fullscreen (WebView2's own event).
+    Fullscreen(u64, bool),
     FindCount(u64, i32, i32),
     NewTab(String),
     Act(Action),
@@ -238,6 +240,8 @@ struct BrowserApp {
     splits: Vec<split::Split>,
     /// When the next opened tab arrives, pair it to the right of this tab.
     split_next: Option<u64>,
+    /// The tab whose page is fullscreen (in a split, only that page is shown).
+    fullscreen_tab: Option<u64>,
     fullscreen: bool,
     saved_window: Option<(egui::Pos2, egui::Vec2)>,
     was_maximized: bool,
@@ -443,6 +447,7 @@ impl BrowserApp {
             last_layout: None,
             splits: vec![],
             split_next: None,
+            fullscreen_tab: None,
             fullscreen: false,
             saved_window: None,
             was_maximized: false,
@@ -621,7 +626,7 @@ impl BrowserApp {
         let s = send.clone();
         wv2::on_focus(&webview, move || s(Ev::Focus(id)));
         let s = send.clone();
-        wv2::on_fullscreen(&webview, move |on| s(Ev::Act(Action::Fullscreen(on))));
+        wv2::on_fullscreen(&webview, move |on| s(Ev::Fullscreen(id, on)));
         if !self.ext_loaded {
             self.ext_loaded = true;
             extensions::load_all(&webview, self.ext_notify(ctx));
@@ -713,6 +718,12 @@ impl BrowserApp {
     /// Show the active tab — and its split partner, if it has one — and hide every other tab.
     fn show_active(&self) {
         let Some(cur) = self.tabs.get(self.active).map(|t| t.id) else { return };
+        if let (true, Some(f)) = (self.fullscreen, self.fullscreen_tab) {
+            for t in &self.tabs {
+                let _ = t.webview.set_visible(t.id == f);
+            }
+            return;
+        }
         let partner = split::partner(&self.splits, cur);
         for t in &self.tabs {
             let _ = t.webview.set_visible(t.id == cur || Some(t.id) == partner);
@@ -766,11 +777,12 @@ impl BrowserApp {
     /// Where tab `id`'s page goes inside the page area: its pane if it's in a pair, else all of it.
     fn pane_of(&self, id: u64, page: ERect) -> ERect {
         match split::find(&self.splits, id).map(|k| self.splits[k]) {
-            Some(s) => {
+            Some(s) if !self.fullscreen => {
                 let (l, r) = split::pane_rects(page, s.ratio);
                 if s.left == id { l } else { r }
             }
-            None => page,
+            // Unpaired, or fullscreen (the fullscreen page fills the window).
+            _ => page,
         }
     }
 
@@ -1373,6 +1385,11 @@ impl BrowserApp {
                     }
                 }
                 Ev::Focus(id) => self.focus_side(id),
+                Ev::Fullscreen(id, on) => {
+                    self.fullscreen_tab = on.then_some(id);
+                    self.act(Action::Fullscreen(on), ctx);
+                    self.show_active();
+                }
                 Ev::Audio(id, a, m) => {
                     if let Some(tab) = tab_mut(&mut self.tabs, id) {
                         (tab.audible, tab.muted) = (a, m);
@@ -1409,7 +1426,9 @@ impl BrowserApp {
         let kept: Vec<&Tab> = self.tabs.iter().filter(|t| !t.url.starts_with("chrome-extension://")).collect();
         let pinned = kept.iter().take_while(|t| t.pinned).count();
         let tabs: Vec<String> = kept.iter().map(|t| t.url.clone()).collect();
-        let s = store::Session { active: self.active.min(tabs.len().saturating_sub(1)), tabs, pinned, splits: vec![] };
+        let ids: Vec<u64> = kept.iter().map(|t| t.id).collect();
+        let splits = split::to_saved(&ids, &self.splits);
+        let s = store::Session { active: self.active.min(tabs.len().saturating_sub(1)), tabs, pinned, splits };
         if s != self.saved_session {
             store::save_session(&s);
             self.saved_session = s;
@@ -2525,7 +2544,12 @@ impl eframe::App for BrowserApp {
             for t in &mut self.tabs[..n] {
                 t.pinned = true;
             }
+            // Rebuild split pairs; any that no longer fit (a tab failed to open…) are skipped.
+            let ids: Vec<u64> = self.tabs.iter().map(|t| t.id).collect();
+            let pinned: Vec<bool> = self.tabs.iter().map(|t| t.pinned).collect();
+            self.splits = split::from_saved(&ids, &pinned, &self.saved_session.splits);
             self.select(i.min(self.tabs.len().saturating_sub(1)));
+            self.show_active(); // `select` does nothing if that tab is already active
         }
         self.save_session_if_changed();
         self.update_window_title(&ctx);
