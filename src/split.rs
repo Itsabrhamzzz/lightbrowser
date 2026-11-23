@@ -162,6 +162,11 @@ mod tests {
     }
 
     #[test]
+    fn insert_index_without_pairs_is_end() {
+        assert_eq!(insert_index(&[1, 2], &[], 0), 2);
+    }
+
+    #[test]
     fn reorder_jumps_over_pairs() {
         let ids = [1, 2, 3, 4];
         let s = [Split { left: 2, right: 3, ratio: 0.5 }];

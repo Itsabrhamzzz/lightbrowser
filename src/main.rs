@@ -159,6 +159,21 @@ struct Tab {
     pinned: bool,
 }
 
+/// A tab waiting to be opened (next frame, when the window frame is available).
+struct NewTab {
+    url: String,
+    /// Insert at this index (default: the end).
+    at: Option<usize>,
+    /// Switch to it; `false` opens it in the background (a page opened it while a split shows).
+    switch: bool,
+}
+
+impl NewTab {
+    fn new(url: impl Into<String>) -> Self {
+        Self { url: url.into(), at: None, switch: true }
+    }
+}
+
 struct FindBar {
     text: String,
     /// (active match index, match count) as reported by WebView2.
@@ -230,7 +245,7 @@ struct BrowserApp {
     frame_pad: f32,
     tx: Sender<Ev>,
     rx: Receiver<Ev>,
-    pending: Vec<String>,
+    pending: Vec<NewTab>,
     /// After restoring a session, which tab to show once all have opened.
     restore_active: Option<usize>,
     scroll_to_active: bool,
@@ -411,9 +426,9 @@ impl BrowserApp {
         let ipc_token = new_ipc_token();
         let adblock_off = Arc::new(std::sync::RwLock::new(settings.adblock_off.iter().cloned().collect()));
         let (pending, restore_active) = if settings.restore_session && !session.tabs.is_empty() {
-            (session.tabs.clone(), Some(session.active))
+            (session.tabs.iter().map(NewTab::new).collect(), Some(session.active))
         } else {
-            (vec![HOME.into()], None)
+            (vec![NewTab::new(HOME)], None)
         };
         Self {
             web_context: WebContext::new(Some(store::dir())),
@@ -507,7 +522,8 @@ impl BrowserApp {
         }
     }
 
-    fn open_tab(&mut self, frame: &eframe::Frame, ctx: &egui::Context, url: &str) {
+    fn open_tab(&mut self, frame: &eframe::Frame, ctx: &egui::Context, req: NewTab) {
+        let url = req.url.as_str();
         let id = self.next_id;
         self.next_id += 1;
         let r = ctx.content_rect();
@@ -526,6 +542,8 @@ impl BrowserApp {
             .with_initialization_script(AD_SCRIPT)
             .with_initialization_script_for_main_only(PIP_SCRIPT, false)
             .with_initialization_script(STORE_SCRIPT)
+            // A background tab mustn't take keyboard focus from the page being used.
+            .with_focused(req.switch)
             .with_devtools(true)
             .with_browser_extensions_enabled(true)
             .with_custom_protocol("lb".into(), move |_id, req| serve_local(req.uri().path(), &history))
@@ -608,10 +626,11 @@ impl BrowserApp {
             self.ext_loaded = true;
             extensions::load_all(&webview, self.ext_notify(ctx));
         }
-        for t in &self.tabs {
-            let _ = t.webview.set_visible(false);
+        if !req.switch {
+            let _ = webview.set_visible(false);
         }
-        self.tabs.push(Tab {
+        let at = req.at.unwrap_or(self.tabs.len()).min(self.tabs.len());
+        self.tabs.insert(at, Tab {
             id,
             webview,
             title: String::new(),
@@ -625,7 +644,14 @@ impl BrowserApp {
             muted: false,
             pinned: false,
         });
-        self.active = self.tabs.len() - 1;
+        if !req.switch {
+            // Opened in the background: the same tab stays active (it may have shifted right).
+            if at <= self.active && self.tabs.len() > 1 {
+                self.active += 1;
+            }
+            return;
+        }
+        self.active = at;
         if let Some(left) = self.split_next.take() {
             if let Some(li) = self.tabs.iter().position(|t| t.id == left) {
                 self.reposition(self.active, li + 1);
@@ -655,11 +681,33 @@ impl BrowserApp {
         // The other side of the pair that's showing: just make it the active side.
         let (id, cur) = (self.tabs[i].id, self.tabs[self.active].id);
         if split::partner(&self.splits, cur) == Some(id) {
-            return self.focus_side(id);
+            self.focus_side(id);
+            let _ = self.tabs[i].webview.focus();
+            return;
         }
         self.active = i;
         self.show_active();
         self.after_switch();
+    }
+
+    /// Queue a tab the user asked for: it opens right after the split on screen (if any) and is
+    /// switched to.
+    fn queue_tab(&mut self, url: impl Into<String>) {
+        let at = self.shown_split().map(|_| self.split_insert_index());
+        self.pending.push(NewTab { url: url.into(), at, switch: true });
+    }
+
+    /// Queue a tab a page opened: while a split shows, it opens in the background after the split
+    /// so the split stays on screen; otherwise like `queue_tab`.
+    fn queue_from_page(&mut self, url: String) {
+        let shown = self.shown_split().is_some();
+        let at = shown.then(|| self.split_insert_index());
+        self.pending.push(NewTab { url, at, switch: !shown });
+    }
+
+    fn split_insert_index(&self) -> usize {
+        let ids: Vec<u64> = self.tabs.iter().map(|t| t.id).collect();
+        split::insert_index(&ids, &self.splits, self.active)
     }
 
     /// Show the active tab — and its split partner, if it has one — and hide every other tab.
@@ -672,6 +720,42 @@ impl BrowserApp {
     }
 
     // ---- Split view --------------------------------------------------------------------------
+
+    /// Shadows for both panes, the active side's outline, and the draggable divider between them.
+    fn draw_split_chrome(&mut self, ui: &mut egui::Ui, pal: &Palette, page: ERect, s: split::Split) {
+        let (l, r) = split::pane_rects(page, s.ratio);
+        let radius = CornerRadius::same(PAGE_RADIUS as u8);
+        let p = ui.painter().clone();
+        p.add(pal.card_shadow().as_shape(l, radius));
+        p.add(pal.card_shadow().as_shape(r, radius));
+        let active = if self.tabs.get(self.active).is_some_and(|t| t.id == s.left) { l } else { r };
+        p.rect_stroke(
+            active.expand(2.0),
+            CornerRadius::same(PAGE_RADIUS as u8 + 2),
+            Stroke::new(2.0, pal.accent),
+            egui::StrokeKind::Inside,
+        );
+
+        let gap = ERect::from_min_max(egui::pos2(l.right(), l.top()), egui::pos2(r.left(), l.bottom()));
+        let resp = ui.interact(gap.expand2(Vec2::new(3.0, 0.0)), egui::Id::unique("split-divider"), egui::Sense::click_and_drag());
+        let hot = resp.hovered() || resp.dragged();
+        if hot {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        let grip = ERect::from_center_size(gap.center(), Vec2::new(4.0, 36.0));
+        p.rect_filled(grip, CornerRadius::same(2), if hot { pal.accent } else { pal.border });
+        let new_ratio = if resp.double_clicked() {
+            Some(split::DEFAULT_RATIO)
+        } else if resp.dragged() {
+            resp.interact_pointer_pos()
+                .map(|pos| split::clamp_ratio((pos.x - page.left() - split::GAP / 2.0) / (page.width() - split::GAP), page.width()))
+        } else {
+            None
+        };
+        if let (Some(ratio), Some(k)) = (new_ratio, split::find(&self.splits, s.left)) {
+            self.splits[k].ratio = ratio;
+        }
+    }
 
     /// The pair the active tab belongs to, if any.
     fn shown_split(&self) -> Option<split::Split> {
@@ -713,7 +797,7 @@ impl BrowserApp {
             }
             None => {
                 self.split_next = Some(cur_id);
-                self.pending.push(HOME.into());
+                self.queue_tab(HOME);
             }
         }
     }
@@ -873,7 +957,7 @@ impl BrowserApp {
             "reload" => {
                 let _ = self.tabs[i].webview.reload();
             }
-            "dup" => self.pending.push(self.tabs[i].url.clone()),
+            "dup" => self.queue_tab(self.tabs[i].url.clone()),
             "pin" => {
                 let on = !self.tabs[i].pinned;
                 self.set_pinned(i, on);
@@ -956,7 +1040,7 @@ impl BrowserApp {
 
     fn act(&mut self, a: Action, ctx: &egui::Context) {
         match a {
-            Action::New => self.pending.push(HOME.into()),
+            Action::New => self.queue_tab(HOME),
             Action::Close => self.close(self.active),
             Action::Focus => self.focus_chrome(ctx, self.address_id),
             Action::Reload => {
@@ -1029,9 +1113,9 @@ impl BrowserApp {
                 }
             }
             Action::Bookmark => self.toggle_bookmark(),
-            Action::NextTab if !self.tabs.is_empty() => self.select((self.active + 1) % self.tabs.len()),
-            Action::PrevTab if !self.tabs.is_empty() => {
-                self.select((self.active + self.tabs.len() - 1) % self.tabs.len())
+            Action::NextTab | Action::PrevTab if !self.tabs.is_empty() => {
+                let ids: Vec<u64> = self.tabs.iter().map(|t| t.id).collect();
+                self.select(split::cycle(&ids, &self.splits, self.active, a == Action::NextTab));
             }
             Action::GoTab(n) if !self.tabs.is_empty() => {
                 let i = if n >= 9 { self.tabs.len() - 1 } else { n.saturating_sub(1) };
@@ -1039,7 +1123,7 @@ impl BrowserApp {
             }
             Action::Reopen => {
                 if let Some(u) = self.closed.pop() {
-                    self.pending.push(u);
+                    self.queue_tab(u);
                 }
             }
             Action::ZoomIn => self.zoom_step(1),
@@ -1205,7 +1289,7 @@ impl BrowserApp {
     fn show_page(&mut self, url: &str) {
         match self.tabs.iter().position(|t| t.url.starts_with(url)) {
             Some(i) => self.select(i),
-            None => self.pending.push(url.into()),
+            None => self.queue_tab(url),
         }
     }
 
@@ -1302,7 +1386,7 @@ impl BrowserApp {
                         f.counts = (i, n);
                     }
                 }
-                Ev::NewTab(u) => self.pending.push(u),
+                Ev::NewTab(u) => self.queue_from_page(u),
                 Ev::Act(a) => self.act(a, ctx),
                 Ev::Downloaded(url, p, ok) => self.on_download(url, p, ok, now),
                 Ev::Ext(e) => self.on_ext(e, ctx),
@@ -1732,7 +1816,7 @@ impl BrowserApp {
                     std::thread::spawn(move || notify(extensions::ExtEvent::Downloaded(extensions::download(&store_id))));
                 }
             }
-            "open" if arg.starts_with("chrome-extension://") => self.pending.push(arg.to_string()),
+            "open" if arg.starts_with("chrome-extension://") => self.queue_tab(arg.to_string()),
             _ => {}
         }
     }
@@ -1789,7 +1873,7 @@ impl BrowserApp {
         let Some((i, b)) = i.parse::<usize>().ok().and_then(|i| self.bookmarks.get(i).map(|b| (i, b.clone()))) else { return };
         match verb {
             "open" => self.navigate(&b.url),
-            "newtab" => self.pending.push(b.url),
+            "newtab" => self.queue_tab(b.url),
             "rename" => {
                 self.bm_rename = Some((i, b.title, true));
                 if let Some(wv) = self.active_wv() {
@@ -1948,7 +2032,7 @@ impl BrowserApp {
 
         match todo {
             Some(Do::Open(url)) => self.navigate(&url),
-            Some(Do::NewTab(url)) => self.pending.push(url),
+            Some(Do::NewTab(url)) => self.queue_tab(url),
             Some(Do::Menu(i, x)) => self.bookmark_menu(i, x),
             Some(Do::More(from, right)) => {
                 self.panel_touched = true;
@@ -2421,8 +2505,8 @@ impl eframe::App for BrowserApp {
         if std::mem::take(&mut self.blur_address) {
             ctx.memory_mut(|m| m.surrender_focus(self.address_id));
         }
-        for url in std::mem::take(&mut self.pending) {
-            self.open_tab(frame, &ctx, &url);
+        for req in std::mem::take(&mut self.pending) {
+            self.open_tab(frame, &ctx, req);
         }
         if let Some((kind, anchor)) = self.panel_req.take() {
             self.open_panel(frame, &ctx, kind, anchor);
@@ -2519,7 +2603,13 @@ impl eframe::App for BrowserApp {
         // When maximized, Windows hangs the (invisible) frame past the screen edges; keep clear of it.
         let full = ui.max_rect().shrink(self.frame_pad);
         // Soft shadow around the page card (the page itself is drawn by WebView2 on top).
-        ui.painter().add(pal.card_shadow().as_shape(page, CornerRadius::same(PAGE_RADIUS as u8)));
+        let radius = CornerRadius::same(PAGE_RADIUS as u8);
+        match self.shown_split() {
+            Some(s) => self.draw_split_chrome(ui, &pal, page, s),
+            None => {
+                ui.painter().add(pal.card_shadow().as_shape(page, radius));
+            }
+        }
 
         let mut out = Vec::new();
         let pressed_in_chrome = ctx.input(|i| i.pointer.any_pressed());
