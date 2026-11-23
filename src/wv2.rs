@@ -93,6 +93,18 @@ pub fn on_history(wv: &WebView, notify: impl Fn(bool, bool) + 'static) {
     }
 }
 
+/// Report when this tab's page gets keyboard focus (a click anywhere in it, iframes included).
+pub fn on_focus(wv: &WebView, notify: impl Fn() + 'static) {
+    let controller = wv.controller();
+    let handler = FocusChangedEventHandler::create(Box::new(move |_, _| {
+        notify();
+        Ok(())
+    }));
+    unsafe {
+        let _ = controller.add_GotFocus(&handler, &mut 0);
+    }
+}
+
 /// Report whether the page shows a fullscreen element (video fullscreen etc.). Comes from WebView2
 /// itself, so a page can't fake it with a message.
 pub fn on_fullscreen(wv: &WebView, notify: impl Fn(bool) + 'static) {
