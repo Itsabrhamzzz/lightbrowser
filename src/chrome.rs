@@ -489,28 +489,7 @@ pub fn tab_strip(
                 // Far enough out: show the tab following the pointer, ready to become a window.
                 Some(p) if torn(p) => {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                    let ghost = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::unique("tab-ghost")));
-                    let g = Rect::from_min_size(p + Vec2::new(-24.0, -TAB_H / 2.0), Vec2::new(tab_w.max(160.0), TAB_H));
-                    ghost.add(pal.card_shadow().as_shape(g, CornerRadius::same(10)));
-                    ghost.rect_filled(g, CornerRadius::same(10), pal.card);
-                    ghost.rect_stroke(g, CornerRadius::same(10), Stroke::new(1.0, pal.accent), egui::StrokeKind::Inside);
-                    let ic = egui::pos2(g.left() + 17.0, g.center().y);
-                    match t.favicon {
-                        Some(tex) => {
-                            ghost.image(tex.id(), Rect::from_center_size(ic, Vec2::splat(16.0)), Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
-                        }
-                        None => {
-                            ghost.circle_filled(ic, 5.0, pal.muted.gamma_multiply(0.45));
-                        }
-                    }
-                    let text = Rect::from_min_max(egui::pos2(g.left() + 31.0, g.top()), egui::pos2(g.right() - 10.0, g.bottom()));
-                    ghost.with_clip_rect(text).text(
-                        egui::pos2(text.left(), g.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        t.title,
-                        FontId::proportional(13.0),
-                        pal.text,
-                    );
+                    tab_ghost(ui.ctx(), pal, t, p, tab_w);
                 }
                 Some(p) => {
                     if let Some(to) = reorder_target(i, p.x, &centers) {
@@ -541,6 +520,42 @@ pub fn tab_strip(
         }
     }
     (event, strip.right())
+}
+
+/// The tab being torn off, following the pointer. It's a tiny borderless always-on-top window
+/// (not a paint on our own window), so it stays visible over the page, which is a separate native
+/// window stacked above ours. It ignores the mouse and never takes focus, so the drop still lands.
+fn tab_ghost(ctx: &egui::Context, pal: &Palette, t: &TabView, pointer: Pos2, tab_w: f32) {
+    let origin = ctx.input(|i| i.viewport().inner_rect.map(|r| r.min)).unwrap_or(Pos2::ZERO);
+    let size = Vec2::new(tab_w.clamp(180.0, TAB_MAX), TAB_H);
+    let at = origin + pointer.to_vec2() + Vec2::new(-24.0, -TAB_H / 2.0);
+    let builder = egui::ViewportBuilder::default()
+        .with_title(t.title)
+        .with_decorations(false)
+        .with_resizable(false)
+        .with_always_on_top()
+        .with_taskbar(false)
+        .with_active(false)
+        .with_mouse_passthrough(true)
+        .with_position(at)
+        .with_inner_size(size);
+    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("tab-ghost"), builder, |ui, _| {
+        let p = ui.painter();
+        let r = Rect::from_min_size(Pos2::ZERO, size);
+        p.rect_filled(r, CornerRadius::ZERO, pal.card);
+        p.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, pal.accent), egui::StrokeKind::Inside);
+        let ic = egui::pos2(r.left() + 17.0, r.center().y);
+        match t.favicon {
+            Some(tex) => {
+                p.image(tex.id(), Rect::from_center_size(ic, Vec2::splat(16.0)), Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            None => {
+                p.circle_filled(ic, 5.0, pal.muted.gamma_multiply(0.45));
+            }
+        }
+        let text = Rect::from_min_max(egui::pos2(r.left() + 31.0, r.top()), egui::pos2(r.right() - 10.0, r.bottom()));
+        p.with_clip_rect(text).text(egui::pos2(text.left(), r.center().y), egui::Align2::LEFT_CENTER, t.title, FontId::proportional(13.0), pal.text);
+    });
 }
 
 /// `top` (premultiplied, possibly translucent) composited over an opaque `bottom`.
