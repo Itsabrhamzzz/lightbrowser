@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn title_words_match_and_bookmarks_rank_higher() {
         let hist = [h("https://a.com/", "Rust news", 3, 0)];
-        let bms = [Bookmark { title: "The Rust Book".into(), url: "https://doc.rust-lang.org/book/".into() }];
+        let bms = [Bookmark { title: "The Rust Book".into(), url: "https://doc.rust-lang.org/book/".into(), icon_only: false }];
         // Visited long ago, so no recency bonus.
         let s = suggest("rust", &hist, &bms, ENGINE, 100 * 86_400);
         assert_eq!(s[1].kind, Kind::Bookmark);
@@ -146,7 +146,7 @@ mod tests {
     fn dedupes_skips_internal_and_caps() {
         let mut hist: Vec<_> = (0..20).map(|i| h(&format!("https://site{i}.com/"), "Site", 1, 0)).collect();
         hist.push(h("http://lb.localhost/history", "Site history", 9, 0));
-        let bms = [Bookmark { title: "Site".into(), url: "https://site0.com/".into() }];
+        let bms = [Bookmark { title: "Site".into(), url: "https://site0.com/".into(), icon_only: false }];
         let s = suggest("site", &hist, &bms, ENGINE, 0);
         assert_eq!(s.len(), MAX);
         assert_eq!(s.iter().filter(|x| x.url == "https://site0.com/").count(), 1);

@@ -42,6 +42,9 @@ pub struct Session {
 pub struct Bookmark {
     pub title: String,
     pub url: String,
+    /// Show just the site icon on the bookmarks bar (the name stays as its tooltip).
+    #[serde(default)]
+    pub icon_only: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -196,7 +199,7 @@ mod tests {
         let d = tmp("rt");
         let s: Settings = load_in(&d, "settings.json");
         assert_eq!(s, Settings::default());
-        let b = vec![Bookmark { title: "Rust".into(), url: "https://rust-lang.org/".into() }];
+        let b = vec![Bookmark { title: "Rust".into(), url: "https://rust-lang.org/".into(), icon_only: true }];
         save_in(&d, "bookmarks.json", &b);
         let back: Vec<Bookmark> = load_in(&d, "bookmarks.json");
         assert_eq!(back, b);

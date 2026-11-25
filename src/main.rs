@@ -42,6 +42,7 @@ const DOWNLOADS_PAGE: &str = "http://lb.localhost/downloads";
 const DOWNLOADS_HTML: &str = include_str!("downloads.html");
 const MENU_PAGE: &str = "http://lb.localhost/menu";
 const MENU_HTML: &str = include_str!("menu.html");
+const BOOKMARK_HTML: &str = include_str!("bookmark.html");
 const HISTORY_HTML: &str = include_str!("history.html");
 const EXT_MENU_HTML: &str = include_str!("ext-menu.html");
 const PANEL_SCRIPT: &str = include_str!("scripts/panel.js");
@@ -193,6 +194,8 @@ enum PanelKind {
     Context(String),
     /// Address-bar suggestions (shared menu page; keyboard focus stays in the address bar).
     Suggest,
+    /// The "Add / Edit bookmark" dialog under the star (its page URL carries the details).
+    Bookmark(String),
 }
 
 impl PanelKind {
@@ -226,6 +229,8 @@ struct Toast {
 }
 
 struct BrowserApp {
+    /// Right edge of the bookmark star, to anchor the bookmark dialog under it.
+    star_right: f32,
     /// A window torn off from another: it doesn't restore or save the session.
     secondary: bool,
     web_context: WebContext,
@@ -417,6 +422,7 @@ fn serve_local(path: &str, history: &History) -> wry::http::Response<std::borrow
                 "/history" => HISTORY_HTML,
                 "/downloads" => DOWNLOADS_HTML,
                 "/menu" => MENU_HTML,
+                "/bookmark" => BOOKMARK_HTML,
                 _ => START_HTML,
             };
             wry::http::Response::builder()
@@ -443,6 +449,7 @@ impl BrowserApp {
             (vec![NewTab::new(HOME)], None)
         };
         Self {
+            star_right: 0.0,
             secondary,
             web_context: WebContext::new(Some(store::dir())),
             tabs: vec![],
@@ -1060,16 +1067,50 @@ impl BrowserApp {
         self.tabs.get(self.active).is_some_and(|t| self.bookmarks.iter().any(|b| b.url == t.url))
     }
 
+    /// The star (or Ctrl+D): open the bookmark dialog under the star, asking for a name. For a page
+    /// that's already bookmarked it edits that bookmark (rename, icon-only, or remove).
     fn toggle_bookmark(&mut self) {
         let Some(t) = self.tabs.get(self.active) else { return };
         if is_internal(&t.url) {
             return;
         }
-        if let Some(i) = self.bookmarks.iter().position(|b| b.url == t.url) {
-            self.bookmarks.remove(i);
+        self.panel_touched = true;
+        if matches!(self.panel_open.as_ref().map(|p| &p.kind), Some(PanelKind::Bookmark(_))) {
+            return self.close_panel(); // a second click on the star closes it
+        }
+        let existing = self.bookmarks.iter().find(|b| b.url == t.url);
+        let title = match existing {
+            Some(b) => b.title.clone(),
+            None if t.title.is_empty() => display_url(&t.url),
+            None => t.title.clone(),
+        };
+        let query: String = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("url", &t.url)
+            .append_pair("title", &title)
+            .append_pair("icon", if existing.is_some_and(|b| b.icon_only) { "1" } else { "0" })
+            .append_pair("saved", if existing.is_some() { "1" } else { "0" })
+            .finish();
+        let page = format!("http://lb.localhost/bookmark?{query}");
+        self.panel_req = Some((PanelKind::Bookmark(page), Anchor::Right(self.star_right)));
+    }
+
+    /// Save (add or update) a bookmark from the dialog. An empty name means icon only.
+    fn save_bookmark(&mut self, url: &str, title: &str, icon_only: bool) {
+        if url.is_empty() {
+            return;
+        }
+        let icon_only = icon_only || title.is_empty();
+        let title = if title.is_empty() {
+            self.tabs.iter().find(|t| t.url == url).map(|t| t.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| display_url(url))
         } else {
-            let title = if t.title.is_empty() { display_url(&t.url) } else { t.title.clone() };
-            self.bookmarks.push(store::Bookmark { title, url: t.url.clone() });
+            title.to_string()
+        };
+        match self.bookmarks.iter_mut().find(|b| b.url == url) {
+            Some(b) => {
+                b.title = title;
+                b.icon_only = icon_only;
+            }
+            None => self.bookmarks.push(store::Bookmark { title, url: url.to_string(), icon_only }),
         }
         store::save_bookmarks(&self.bookmarks);
         self.refresh_internal_pages();
@@ -1622,6 +1663,7 @@ impl BrowserApp {
         let url = match &kind {
             PanelKind::Menu => EXT_MENU.to_string(),
             PanelKind::Context(_) | PanelKind::Suggest => MENU_PAGE.to_string(),
+            PanelKind::Bookmark(page) => page.clone(),
             PanelKind::Popup(id) => {
                 let Some(popup) = self.ext_folders.get(id).and_then(|f| extensions::manifest_pages(f).0) else { return };
                 format!("chrome-extension://{id}/{}", popup.trim_start_matches('/'))
@@ -1630,6 +1672,7 @@ impl BrowserApp {
         let size = match kind {
             PanelKind::Menu => Vec2::new(320.0, 60.0),
             PanelKind::Popup(_) => Vec2::new(340.0, 60.0),
+            PanelKind::Bookmark(_) => Vec2::new(320.0, 200.0),
             _ => Vec2::new(220.0, 40.0),
         };
         // Suggestions must leave keyboard focus in the address bar.
@@ -1910,11 +1953,13 @@ impl BrowserApp {
     }
 
     fn bookmark_menu(&mut self, i: usize, x: f32) {
+        let icon_only = self.bookmarks.get(i).is_some_and(|b| b.icon_only);
         let items = serde_json::json!([
             { "label": "Open", "cmd": format!("bm:open:{i}") },
             { "label": "Open in new tab", "cmd": format!("bm:newtab:{i}") },
             { "sep": true },
-            { "label": "Rename…", "cmd": format!("bm:rename:{i}") },
+            { "label": "Rename…", "cmd": format!("bm:rename:{i}"), "hint": "Empty = icon only" },
+            { "label": if icon_only { "Show name" } else { "Show icon only" }, "cmd": format!("bm:icon:{i}") },
             { "label": "Remove", "cmd": format!("bm:del:{i}"), "danger": true },
             { "sep": true },
             { "label": "Hide bookmarks bar", "cmd": "bm:hidebar", "hint": "Ctrl+Shift+B" },
@@ -1940,6 +1985,19 @@ impl BrowserApp {
         if cmd == "hidebar" {
             return self.toggle_bookmarks_bar();
         }
+        if let Some(json) = cmd.strip_prefix("save:") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
+                let (url, title) = (v["url"].as_str().unwrap_or_default(), v["title"].as_str().unwrap_or_default());
+                self.save_bookmark(url, title.trim(), v["icon_only"].as_bool().unwrap_or(false));
+            }
+            return;
+        }
+        if let Some(url) = cmd.strip_prefix("unsave:") {
+            self.bookmarks.retain(|b| b.url != url);
+            store::save_bookmarks(&self.bookmarks);
+            self.refresh_internal_pages();
+            return;
+        }
         let Some((verb, i)) = cmd.split_once(':') else { return };
         let Some((i, b)) = i.parse::<usize>().ok().and_then(|i| self.bookmarks.get(i).map(|b| (i, b.clone()))) else { return };
         match verb {
@@ -1951,6 +2009,13 @@ impl BrowserApp {
                     let _ = wv.focus_parent(); // typing goes to our window, not the page
                 }
                 ctx.request_repaint();
+            }
+            "icon" => {
+                if let Some(b) = self.bookmarks.get_mut(i) {
+                    b.icon_only = !b.icon_only;
+                }
+                store::save_bookmarks(&self.bookmarks);
+                self.refresh_internal_pages();
             }
             "del" => {
                 self.bookmarks.remove(i);
@@ -1998,6 +2063,9 @@ impl BrowserApp {
             .map(|(i, b)| {
                 if self.bm_rename.as_ref().is_some_and(|r| r.0 == i) {
                     return 200.0;
+                }
+                if b.icon_only {
+                    return h; // square: just the icon
                 }
                 let title = if b.title.is_empty() { display_url(&b.url) } else { b.title.clone() };
                 let text_w = p.layout_no_wrap(title, font.clone(), pal.text).size().x.min(140.0);
@@ -2052,7 +2120,8 @@ impl BrowserApp {
             if resp.hovered() || resp.dragged() {
                 p.rect_filled(*rect, CornerRadius::same(8), if resp.dragged() { pal.card } else { pal.hover });
             }
-            let ic = ERect::from_center_size(egui::pos2(rect.left() + pad + icon / 2.0, y), Vec2::splat(icon));
+            let ic_x = if b.icon_only { rect.center().x } else { rect.left() + pad + icon / 2.0 };
+            let ic = ERect::from_center_size(egui::pos2(ic_x, y), Vec2::splat(icon));
             match self.bookmark_favicon(&b.url) {
                 Some(t) => {
                     p.image(t.id(), ic, ERect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
@@ -2063,14 +2132,16 @@ impl BrowserApp {
                     p.text(ic.center(), Align2::CENTER_CENTER, letter, FontId::proportional(10.0), pal.text);
                 }
             }
-            let text_rect = ERect::from_min_max(egui::pos2(ic.right() + 6.0, rect.top()), egui::pos2(rect.right() - pad, rect.bottom()));
-            let galley = p.layout_no_wrap(title.clone(), font.clone(), pal.text);
-            let clipped = galley.size().x > text_rect.width();
-            // Leave room for the "…" so it doesn't sit on top of the last letters.
-            let clip = if clipped { text_rect.with_max_x(text_rect.right() - 10.0) } else { text_rect };
-            p.with_clip_rect(clip).galley(egui::pos2(text_rect.left(), y - galley.size().y / 2.0), galley, pal.text);
-            if clipped {
-                p.text(egui::pos2(text_rect.right(), y), Align2::RIGHT_CENTER, "…", font.clone(), pal.muted);
+            if !b.icon_only {
+                let text_rect = ERect::from_min_max(egui::pos2(ic.right() + 6.0, rect.top()), egui::pos2(rect.right() - pad, rect.bottom()));
+                let galley = p.layout_no_wrap(title.clone(), font.clone(), pal.text);
+                let clipped = galley.size().x > text_rect.width();
+                // Leave room for the "…" so it doesn't sit on top of the last letters.
+                let clip = if clipped { text_rect.with_max_x(text_rect.right() - 10.0) } else { text_rect };
+                p.with_clip_rect(clip).galley(egui::pos2(text_rect.left(), y - galley.size().y / 2.0), galley, pal.text);
+                if clipped {
+                    p.text(egui::pos2(text_rect.right(), y), Align2::RIGHT_CENTER, "…", font.clone(), pal.muted);
+                }
             }
 
             if resp.dragged() {
@@ -2122,9 +2193,15 @@ impl BrowserApp {
             Some(Do::Rename(i, title, save)) => {
                 self.bm_rename = None;
                 let title = title.trim();
-                if save && !title.is_empty() {
+                if save {
                     if let Some(b) = self.bookmarks.get_mut(i) {
-                        b.title = title.to_string();
+                        // Clearing the name keeps the old one as the tooltip and shows just the icon.
+                        if title.is_empty() {
+                            b.icon_only = true;
+                        } else {
+                            b.title = title.to_string();
+                            b.icon_only = false;
+                        }
                         store::save_bookmarks(&self.bookmarks);
                         self.refresh_internal_pages();
                     }
@@ -2383,6 +2460,7 @@ impl BrowserApp {
                 let r = ERect::from_center_size(egui::pos2(x - 12.0, pill.center().y), Vec2::splat(24.0));
                 let bookmarked = self.is_bookmarked();
                 let resp = ui.scope_builder(egui::UiBuilder::new().max_rect(r), |ui| chrome::star_button(ui, pal, bookmarked)).inner;
+                self.star_right = resp.rect.right() + 6.0;
                 if resp.clicked() {
                     out.push(UiReq::Act(Action::Bookmark));
                 }
