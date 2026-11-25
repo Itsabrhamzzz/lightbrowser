@@ -233,6 +233,8 @@ struct BrowserApp {
     star_right: f32,
     /// A window torn off from another: it doesn't restore or save the session.
     secondary: bool,
+    /// Set when this window should close (a torn-off window's last tab was closed).
+    close_window: bool,
     web_context: WebContext,
     tabs: Vec<Tab>,
     active: usize,
@@ -451,6 +453,7 @@ impl BrowserApp {
         Self {
             star_right: 0.0,
             secondary,
+            close_window: false,
             web_context: WebContext::new(Some(store::dir())),
             tabs: vec![],
             active: 0,
@@ -888,8 +891,9 @@ impl BrowserApp {
             }
         }
         if self.tabs.len() == 1 {
-            // Closing the last tab leaves a fresh start page instead of an empty window.
-            let _ = self.tabs[0].webview.load_url(HOME);
+            // Closing the last tab closes the window (torn-off windows are separate processes,
+            // so they stay open). The session was already saved with this tab in it.
+            self.close_window = true;
             return;
         }
         let was_active = i == self.active;
@@ -2710,6 +2714,10 @@ impl eframe::App for BrowserApp {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64((t.until - now).max(0.1)));
         }
 
+        if self.close_window {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         let top = self.content_top();
         let r = ctx.content_rect();
         let page = self.page_rect(r.width(), r.height());
