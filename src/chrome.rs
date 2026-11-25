@@ -294,7 +294,17 @@ pub enum TabEvent {
     Mute(usize),
     /// Right-click, at this x.
     Menu(usize, f32),
+    /// Dragged out of the tab strip and dropped at this point (window coordinates): open it in a
+    /// new window.
+    Detach(usize, Pos2),
 }
+
+/// How far (points) above or below the tab strip a dragged tab must be to tear off.
+const DETACH_DIST: f32 = 44.0;
+/// How long a tab takes to glide to a new position (reorder, close, open), in seconds.
+const SLIDE_TIME: f32 = 0.16;
+/// How long a new tab takes to fade in, and the active/hover highlight to cross-fade.
+const FADE_TIME: f64 = 0.18;
 
 /// While dragging tab `i` with the pointer at `x`, the index it should move to (if any):
 /// past the centre of a neighbour means swap with it.
@@ -358,17 +368,56 @@ pub fn tab_strip(
 
     // Clip sideways only, so the active tab's shadow isn't cut off.
     let painter = ui.painter().with_clip_rect(strip.expand2(Vec2::new(0.0, 8.0)));
+    // Positions are animated per tab (keyed by its stable id), so tabs glide when the order changes,
+    // a tab closes, or a new one opens. The tab being dragged follows the pointer instead.
+    let ctx = ui.ctx().clone();
+    let pointer_now = ui.input(|inp| inp.pointer.latest_pos());
     let mut rects = Vec::with_capacity(tabs.len());
+    let mut fade_in = Vec::with_capacity(tabs.len());
+    let mut dragged_idx = None;
     for (i, t) in tabs.iter().enumerate() {
-        let rect = Rect::from_min_size(egui::pos2(strip.left() + lefts[i] - off, strip.top()), Vec2::new(widths[i], TAB_H));
         // Stable per-tab id so a drag survives the tab moving to a new slot.
+        let tab_id = Id::unique(("tab", t.id));
+        let x_id = Id::unique(("tab-x", t.id));
+        let born_id = Id::unique(("tab-born", t.id));
+        let grab_id = Id::unique(("tab-grab", t.id));
+        let target = lefts[i];
+        // First sight of a tab: start it a little to the right so it slides (and fades) in.
+        let born = ctx.data(|d| d.get_temp::<f64>(born_id)).unwrap_or_else(|| {
+            ctx.data_mut(|d| d.insert_temp(born_id, time));
+            ctx.animate_value_with_time(x_id, target + 24.0, 0.0);
+            time
+        });
+        let mut left = ctx.animate_value_with_time(x_id, target, SLIDE_TIME);
+        if ctx.is_being_dragged(tab_id) {
+            if let Some(p) = pointer_now {
+                // Keep the spot where the tab was grabbed under the pointer.
+                let grab = ctx.data(|d| d.get_temp::<f32>(grab_id)).unwrap_or_else(|| {
+                    let g = p.x - (strip.left() + left - off);
+                    ctx.data_mut(|d| d.insert_temp(grab_id, g));
+                    g
+                });
+                left = (p.x - grab - strip.left() + off).clamp(0.0, (content_w - widths[i]).max(0.0));
+                // Releasing then animates from wherever the tab was dropped.
+                ctx.animate_value_with_time(x_id, left, 0.0);
+            }
+            dragged_idx = Some(i);
+        } else {
+            ctx.data_mut(|d| d.remove::<f32>(grab_id));
+        }
+        fade_in.push(((time - born) / FADE_TIME).clamp(0.0, 1.0) as f32);
+        let rect = Rect::from_min_size(egui::pos2(strip.left() + left - off, strip.top()), Vec2::new(widths[i], TAB_H));
         // Halves of a split pair can't be dragged.
         let sense = if t.pair == PairPos::None { Sense::click_and_drag() } else { Sense::click() };
-        let resp = ui.interact(rect.intersect(strip), Id::unique(("tab", t.id)), sense);
+        let resp = ui.interact(rect.intersect(strip), tab_id, sense);
         rects.push((rect, resp));
     }
-    let centers: Vec<f32> = rects.iter().map(|(r, _)| r.center().x).collect();
-    for (i, (t, (rect, resp))) in tabs.iter().zip(&rects).enumerate() {
+    // Reordering compares against where tabs will settle, not where they are mid-animation.
+    let centers: Vec<f32> = (0..tabs.len()).map(|i| strip.left() + lefts[i] - off + widths[i] / 2.0).collect();
+    // Draw the dragged tab last, so it floats above the tabs sliding underneath it.
+    let order: Vec<usize> = (0..tabs.len()).filter(|&i| Some(i) != dragged_idx).chain(dragged_idx).collect();
+    for i in order {
+        let (t, (rect, resp)) = (&tabs[i], &rects[i]);
         let is_active = i == active;
         // A pair is "on screen" when either half is the active tab; it then gets one card.
         let pair_shown = match t.pair {
@@ -376,15 +425,27 @@ pub fn tab_strip(
             PairPos::Left => is_active || i + 1 == active,
             PairPos::Right => is_active || i == active + 1,
         };
-        let p = &painter;
+        let mut tab_painter = painter.clone();
+        tab_painter.multiply_opacity(fade_in[i]);
+        let p = &tab_painter;
         let radius = CornerRadius::same(10);
         if t.pair == PairPos::Left && pair_shown {
             let whole = rects.get(i + 1).map_or(*rect, |(r, _)| rect.union(*r));
             p.add(pal.card_shadow().as_shape(whole, radius));
             p.rect_filled(whole, radius, pal.card);
-        } else if (is_active || resp.dragged()) && t.pair == PairPos::None {
-            p.add(pal.card_shadow().as_shape(*rect, radius));
-            p.rect_filled(*rect, radius, pal.card);
+        } else if t.pair == PairPos::None {
+            // The active card and the hover highlight cross-fade rather than switching instantly.
+            let card = ctx.animate_bool_with_time(Id::unique(("tab-card", t.id)), is_active || resp.dragged(), FADE_TIME as f32);
+            let hover = ctx.animate_bool_with_time(Id::unique(("tab-hover", t.id)), resp.hovered(), 0.1);
+            if card > 0.0 {
+                let mut shadow = pal.card_shadow();
+                shadow.color = shadow.color.gamma_multiply(card);
+                p.add(shadow.as_shape(*rect, radius));
+                p.rect_filled(*rect, radius, pal.card.gamma_multiply(card));
+            }
+            if hover > 0.0 && card < 1.0 {
+                p.rect_filled(*rect, radius, pal.hover.gamma_multiply(hover * (1.0 - card)));
+            }
         } else if resp.hovered() && !pair_shown {
             p.rect_filled(*rect, radius, pal.hover);
         }
@@ -472,12 +533,45 @@ pub fn tab_strip(
             }
         }
 
+        let pointer = ui.input(|inp| inp.pointer.latest_pos());
+        let torn = |p: Pos2| (p.y - strip.center().y).abs() > DETACH_DIST;
         if resp.dragged() {
-            if let Some(x) = resp.interact_pointer_pos().map(|p| p.x) {
-                if let Some(to) = reorder_target(i, x, &centers) {
-                    event = Some(TabEvent::Move { from: i, to });
+            match pointer {
+                // Far enough out: show the tab following the pointer, ready to become a window.
+                Some(p) if torn(p) => {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    let ghost = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::unique("tab-ghost")));
+                    let g = Rect::from_min_size(p + Vec2::new(-24.0, -TAB_H / 2.0), Vec2::new(tab_w.max(160.0), TAB_H));
+                    ghost.add(pal.card_shadow().as_shape(g, CornerRadius::same(10)));
+                    ghost.rect_filled(g, CornerRadius::same(10), pal.card);
+                    ghost.rect_stroke(g, CornerRadius::same(10), Stroke::new(1.0, pal.accent), egui::StrokeKind::Inside);
+                    let ic = egui::pos2(g.left() + 17.0, g.center().y);
+                    match t.favicon {
+                        Some(tex) => {
+                            ghost.image(tex.id(), Rect::from_center_size(ic, Vec2::splat(16.0)), Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
+                        }
+                        None => {
+                            ghost.circle_filled(ic, 5.0, pal.muted.gamma_multiply(0.45));
+                        }
+                    }
+                    let text = Rect::from_min_max(egui::pos2(g.left() + 31.0, g.top()), egui::pos2(g.right() - 10.0, g.bottom()));
+                    ghost.with_clip_rect(text).text(
+                        egui::pos2(text.left(), g.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        t.title,
+                        FontId::proportional(13.0),
+                        pal.text,
+                    );
                 }
+                Some(p) => {
+                    if let Some(to) = reorder_target(i, p.x, &centers) {
+                        event = Some(TabEvent::Move { from: i, to });
+                    }
+                }
+                None => {}
             }
+        } else if resp.drag_stopped() && pointer.is_some_and(torn) {
+            event = pointer.map(|p| TabEvent::Detach(i, p));
         } else if resp.clicked() {
             event = Some(if on_close {
                 TabEvent::Close(i)

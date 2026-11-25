@@ -26,9 +26,10 @@ const STRIP_H: f32 = 44.0;
 /// Extra toolbar height while the bookmarks bar is shown.
 const BM_BAR_H: f32 = 30.0;
 const PILL_H: f32 = 34.0;
-/// The page sits inset from the window edges as a rounded card.
+/// Side padding of the toolbar rows. (The page itself runs to the window's edges.)
 const INSET: f32 = 8.0;
-const PAGE_RADIUS: f32 = 10.0;
+/// Matches the rounding Windows 11 gives the window itself.
+const PAGE_RADIUS: f32 = 8.0;
 const WIN_BTN_W: f32 = 46.0;
 const WIN_BTN_H: f32 = 36.0;
 /// How close to the window edge the pointer must be to resize (there is no native frame).
@@ -225,6 +226,8 @@ struct Toast {
 }
 
 struct BrowserApp {
+    /// A window torn off from another: it doesn't restore or save the session.
+    secondary: bool,
     web_context: WebContext,
     tabs: Vec<Tab>,
     active: usize,
@@ -425,18 +428,22 @@ fn serve_local(path: &str, history: &History) -> wry::http::Response<std::borrow
 }
 
 impl BrowserApp {
-    fn new() -> Self {
+    fn new(launch: Launch) -> Self {
         let (tx, rx) = channel();
         let settings = store::settings();
         let session = store::session();
+        let secondary = launch.url.is_some();
         let ipc_token = new_ipc_token();
         let adblock_off = Arc::new(std::sync::RwLock::new(settings.adblock_off.iter().cloned().collect()));
-        let (pending, restore_active) = if settings.restore_session && !session.tabs.is_empty() {
+        let (pending, restore_active) = if let Some(url) = &launch.url {
+            (vec![NewTab::new(url)], None)
+        } else if settings.restore_session && !session.tabs.is_empty() {
             (session.tabs.iter().map(NewTab::new).collect(), Some(session.active))
         } else {
             (vec![NewTab::new(HOME)], None)
         };
         Self {
+            secondary,
             web_context: WebContext::new(Some(store::dir())),
             tabs: vec![],
             active: 0,
@@ -519,7 +526,7 @@ impl BrowserApp {
     /// Where the page card sits (window coordinates, points).
     fn page_rect(&self, w: f32, h: f32) -> ERect {
         let top = self.content_top();
-        let inset = if self.fullscreen { 0.0 } else { INSET + self.frame_pad };
+        let inset = if self.fullscreen { 0.0 } else { self.frame_pad };
         ERect::from_min_max(egui::pos2(inset, top), egui::pos2((w - inset).max(inset + 1.0), (h - inset).max(top + 1.0)))
     }
 
@@ -886,6 +893,37 @@ impl BrowserApp {
             let _ = self.tabs[self.active].webview.focus();
         }
         self.after_switch();
+    }
+
+    /// Open tab `i` in a new LightBrowser window placed where it was dropped (`at`, window
+    /// coordinates), and remove it here. The only tab in a window can't be torn off.
+    fn detach(&mut self, ctx: &egui::Context, i: usize, at: egui::Pos2) {
+        if self.tabs.len() <= 1 || i >= self.tabs.len() {
+            return;
+        }
+        let url = self.tabs[i].url.clone();
+        let (outer, inner) = ctx.input(|inp| (inp.viewport().outer_rect, inp.viewport().inner_rect));
+        let origin = inner.or(outer).map_or(egui::Pos2::ZERO, |r| r.min);
+        let size = inner.map_or(Vec2::new(1100.0, 750.0), |r| r.size());
+        // Put the new window so its first tab sits under the pointer.
+        let pos = origin + at.to_vec2() - Vec2::new(60.0, 20.0);
+        let Ok(exe) = std::env::current_exe() else { return };
+        let spawned = std::process::Command::new(exe)
+            .arg("--window")
+            .arg(&url)
+            .arg("--at")
+            .arg(format!("{},{}", pos.x.round(), pos.y.round()))
+            .arg("--size")
+            .arg(format!("{},{}", size.x.round(), size.y.round()))
+            .spawn();
+        if spawned.is_ok() {
+            // It moved rather than closed: keep it off the "reopen closed tab" list.
+            let before = self.closed.len();
+            self.close(i);
+            if self.closed.len() > before {
+                self.closed.pop();
+            }
+        }
     }
 
     /// Drag-reorder: a tab can't cross the pinned / unpinned boundary, paired tabs don't move, and
@@ -1429,7 +1467,8 @@ impl BrowserApp {
 
     /// Persist the open tabs whenever they change (cheap: a handful of strings per frame).
     fn save_session_if_changed(&mut self) {
-        if self.tabs.is_empty() || !self.pending.is_empty() {
+        // A window torn off from another doesn't own the saved session.
+        if self.secondary || self.tabs.is_empty() || !self.pending.is_empty() {
             return;
         }
         let kept: Vec<&Tab> = self.tabs.iter().filter(|t| !t.url.starts_with("chrome-extension://")).collect();
@@ -1854,8 +1893,9 @@ impl BrowserApp {
 
     // ---- Bookmarks bar ---------------------------------------------------------------------
 
+    /// The bookmarks bar shows on the home page only, so other pages get the full height.
     fn bar_shown(&self) -> bool {
-        self.settings.show_bookmarks_bar && !self.fullscreen
+        self.settings.show_bookmarks_bar && !self.fullscreen && self.tabs.get(self.active).is_some_and(|t| t.url == HOME)
     }
 
     /// Height of the toolbar (tab row, navigation row, and the bookmarks bar when shown).
@@ -2671,6 +2711,7 @@ impl eframe::App for BrowserApp {
                 UiReq::Tab(TabEvent::Select(i)) => self.select(i),
                 UiReq::Tab(TabEvent::Close(i)) => self.close(i),
                 UiReq::Tab(TabEvent::Move { from, to }) => self.move_tab(from, to),
+                UiReq::Tab(TabEvent::Detach(i, at)) => self.detach(&ctx, i, at),
                 UiReq::Tab(TabEvent::Mute(i)) => {
                     if let Some(t) = self.tabs.get(i) {
                         wv2::set_muted(&t.webview, !t.muted);
@@ -2731,28 +2772,74 @@ fn window_icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// How this process was started: normally (restore the session), or as a window torn off from
+/// another one (`--window <url> [--at x,y] [--size w,h]`).
+#[derive(Default)]
+struct Launch {
+    url: Option<String>,
+    at: Option<[f32; 2]>,
+    size: Option<[f32; 2]>,
+}
+
+impl Launch {
+    fn parse(mut args: impl Iterator<Item = String>) -> Self {
+        let pair = |s: Option<String>| -> Option<[f32; 2]> {
+            let s = s?;
+            let (a, b) = s.split_once(',')?;
+            Some([a.trim().parse().ok()?, b.trim().parse().ok()?])
+        };
+        let mut l = Launch::default();
+        while let Some(a) = args.next() {
+            match a.as_str() {
+                "--window" => l.url = args.next().filter(|u| !u.is_empty()),
+                "--at" => l.at = pair(args.next()),
+                "--size" => l.size = pair(args.next()).filter(|s| s[0] >= 300.0 && s[1] >= 200.0),
+                _ => {}
+            }
+        }
+        l
+    }
+}
+
 fn main() -> eframe::Result {
+    let launch = Launch::parse(std::env::args().skip(1));
     let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([1100.0, 750.0])
+        .with_inner_size(launch.size.unwrap_or([1100.0, 750.0]))
         .with_title("LightBrowser")
         .with_decorations(false)
         .with_resizable(true);
     if let Some(icon) = window_icon() {
         viewport = viewport.with_icon(std::sync::Arc::new(icon));
     }
+    if let Some(at) = launch.at {
+        viewport = viewport.with_position(at);
+    }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
     eframe::run_native(
         "LightBrowser",
         options,
         Box::new(|_cc| {
-            Ok(Box::new(BrowserApp::new()))
+            Ok(Box::new(BrowserApp::new(launch)))
         }),
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Action;
+    use super::{Action, Launch};
+
+    #[test]
+    fn launch_args() {
+        let a = |v: &[&str]| Launch::parse(v.iter().map(|s| s.to_string()));
+        let l = a(&["--window", "https://x.org/", "--at", "10,20", "--size", "900,600"]);
+        assert_eq!(l.url.as_deref(), Some("https://x.org/"));
+        assert_eq!(l.at, Some([10.0, 20.0]));
+        assert_eq!(l.size, Some([900.0, 600.0]));
+        let l = a(&[]);
+        assert!(l.url.is_none() && l.at.is_none() && l.size.is_none());
+        assert!(a(&["--size", "10,10"]).size.is_none(), "too-small sizes are ignored");
+        assert!(a(&["--at", "nope"]).at.is_none());
+    }
 
     #[test]
     fn ipc_actions() {
