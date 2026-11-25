@@ -158,11 +158,11 @@
     svg.setAttribute('viewBox', '0 0 24 24');
     svg.setAttribute('fill', 'none');
     svg.setAttribute('stroke', '#fff');
-    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-width', '1.75');
     const r1 = document.createElementNS(NS, 'rect');
-    for (const [k, val] of Object.entries({ x: 2.5, y: 4.5, width: 19, height: 14, rx: 2 })) r1.setAttribute(k, val);
+    for (const [k, val] of Object.entries({ x: 3.5, y: 5, width: 17, height: 14, rx: 2.5 })) r1.setAttribute(k, val);
     const r2 = document.createElementNS(NS, 'rect');
-    for (const [k, val] of Object.entries({ x: 12, y: 11, width: 8, height: 6, rx: 1, fill: '#fff' })) r2.setAttribute(k, val);
+    for (const [k, val] of Object.entries({ x: 12, y: 11.5, width: 5.5, height: 4.5, rx: 1, fill: '#fff' })) r2.setAttribute(k, val);
     svg.append(r1, r2);
     const label = document.createElement('span');
     label.textContent = 'Picture in picture';

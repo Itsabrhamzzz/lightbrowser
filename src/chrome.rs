@@ -14,9 +14,11 @@ const TAB_MAX: f32 = 220.0;
 /// Pinned tabs are icon-only.
 const PIN_W: f32 = 40.0;
 const GAP: f32 = 4.0;
-const STROKE: f32 = 1.6;
+/// Icons are drawn at this size (points) unless their box is smaller.
+const ICON_PT: f32 = 20.0;
 
-#[derive(Clone, Copy)]
+/// Toolbar / UI icons. Each is an SVG in `assets/icons/` (24×24 grid, `currentColor` strokes).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Icon {
     Back,
     Forward,
@@ -38,97 +40,73 @@ pub enum Icon {
     Shield,
     /// …or off.
     ShieldOff,
+    Star,
+    StarFilled,
+    Minimize,
+    Maximize,
+    Restore,
+    WindowClose,
 }
 
-/// Draw `icon` centred in `rect` (designed on a 16×16 grid).
+impl Icon {
+    fn svg(self) -> &'static str {
+        match self {
+            Icon::Back => include_str!("../assets/icons/back.svg"),
+            Icon::Forward => include_str!("../assets/icons/forward.svg"),
+            Icon::Reload => include_str!("../assets/icons/reload.svg"),
+            Icon::Stop => include_str!("../assets/icons/stop.svg"),
+            Icon::Plus => include_str!("../assets/icons/plus.svg"),
+            Icon::Close => include_str!("../assets/icons/close.svg"),
+            Icon::Lock => include_str!("../assets/icons/lock.svg"),
+            Icon::Search => include_str!("../assets/icons/search.svg"),
+            Icon::Up => include_str!("../assets/icons/chevron-up.svg"),
+            Icon::Down => include_str!("../assets/icons/chevron-down.svg"),
+            Icon::Download => include_str!("../assets/icons/download.svg"),
+            Icon::Puzzle => include_str!("../assets/icons/extensions.svg"),
+            Icon::Speaker => include_str!("../assets/icons/speaker.svg"),
+            Icon::Muted => include_str!("../assets/icons/muted.svg"),
+            Icon::Shield => include_str!("../assets/icons/shield.svg"),
+            Icon::ShieldOff => include_str!("../assets/icons/shield-off.svg"),
+            Icon::Star => include_str!("../assets/icons/bookmark.svg"),
+            Icon::StarFilled => include_str!("../assets/icons/bookmark-filled.svg"),
+            Icon::Minimize => include_str!("../assets/icons/minimize.svg"),
+            Icon::Maximize => include_str!("../assets/icons/maximize.svg"),
+            Icon::Restore => include_str!("../assets/icons/restore.svg"),
+            Icon::WindowClose => include_str!("../assets/icons/window-close.svg"),
+        }
+    }
+}
+
+/// Render an icon's SVG in white at exactly `px` × `px` (cached), so it stays crisp at any display
+/// scaling and can be tinted any colour when drawn.
+fn icon_texture(ctx: &egui::Context, icon: Icon, px: u32) -> Option<TextureHandle> {
+    let id = Id::unique(("svg-icon", icon, px));
+    if let Some(tex) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
+        return Some(tex);
+    }
+    use resvg::{tiny_skia, usvg};
+    let svg = icon.svg().replace("currentColor", "#ffffff");
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;
+    let mut pixmap = tiny_skia::Pixmap::new(px, px)?;
+    let scale = px as f32 / tree.size().width().max(tree.size().height());
+    resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    let image = egui::ColorImage::from_rgba_premultiplied([px as usize, px as usize], pixmap.data());
+    let tex = ctx.load_texture(format!("icon-{icon:?}-{px}"), image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    Some(tex)
+}
+
+/// Draw `icon` centred in `rect`, tinted with `color`.
 pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
-    let c = rect.center();
-    let s = Stroke::new(STROKE, color);
-    let line = |pts: &[(f32, f32)]| {
-        p.add(Shape::line(pts.iter().map(|&(x, y)| c + Vec2::new(x, y)).collect(), s));
-    };
-    match icon {
-        Icon::Back => {
-            line(&[(5.5, 0.0), (-5.5, 0.0)]);
-            line(&[(-1.0, -4.5), (-5.5, 0.0), (-1.0, 4.5)]);
-        }
-        Icon::Forward => {
-            line(&[(-5.5, 0.0), (5.5, 0.0)]);
-            line(&[(1.0, -4.5), (5.5, 0.0), (1.0, 4.5)]);
-        }
-        Icon::Reload => {
-            let r = 5.5;
-            let pts: Vec<Pos2> = (0..=24)
-                .map(|i| {
-                    let a = -1.1 + i as f32 / 24.0 * 5.0; // ~286° of arc
-                    c + Vec2::new(a.cos(), a.sin()) * r
-                })
-                .collect();
-            let end = *pts.last().unwrap();
-            p.add(Shape::line(pts, s));
-            // Arrow head at the arc's end, pointing along the direction of travel.
-            p.add(Shape::line(vec![end + Vec2::new(-3.4, -0.6), end, end + Vec2::new(0.4, -3.4)], s));
-        }
-        Icon::Stop | Icon::Close => {
-            let k = if matches!(icon, Icon::Stop) { 4.5 } else { 3.8 };
-            line(&[(-k, -k), (k, k)]);
-            line(&[(-k, k), (k, -k)]);
-        }
-        Icon::Plus => {
-            line(&[(-5.5, 0.0), (5.5, 0.0)]);
-            line(&[(0.0, -5.5), (0.0, 5.5)]);
-        }
-        Icon::Lock => {
-            let body = Rect::from_center_size(c + Vec2::new(0.0, 1.8), Vec2::new(8.0, 6.0));
-            p.rect_filled(body, CornerRadius::same(1), color);
-            let pts: Vec<Pos2> = (0..=12)
-                .map(|i| {
-                    let a = std::f32::consts::PI * (1.0 + i as f32 / 12.0);
-                    c + Vec2::new(0.0, -1.4) + Vec2::new(a.cos() * 2.6, a.sin() * 3.0)
-                })
-                .collect();
-            let (first, last) = (pts[0], *pts.last().unwrap());
-            p.add(Shape::line(pts, Stroke::new(1.4, color)));
-            p.line_segment([first, first + Vec2::new(0.0, 1.6)], Stroke::new(1.4, color));
-            p.line_segment([last, last + Vec2::new(0.0, 1.6)], Stroke::new(1.4, color));
-        }
-        Icon::Search => {
-            p.circle_stroke(c + Vec2::new(-1.2, -1.2), 4.2, Stroke::new(1.5, color));
-            line(&[(1.9, 1.9), (5.0, 5.0)]);
-        }
-        Icon::Up => line(&[(-4.5, 2.2), (0.0, -2.3), (4.5, 2.2)]),
-        Icon::Down => line(&[(-4.5, -2.2), (0.0, 2.3), (4.5, -2.2)]),
-        Icon::Download => {
-            line(&[(0.0, -5.5), (0.0, 3.0)]);
-            line(&[(-3.8, -0.8), (0.0, 3.0), (3.8, -0.8)]);
-            line(&[(-5.5, 5.5), (5.5, 5.5)]);
-        }
-        Icon::Puzzle => {
-            let body = Rect::from_center_size(c + Vec2::new(-1.5, 1.5), Vec2::splat(11.0));
-            p.rect_stroke(body, CornerRadius::same(2), s, egui::StrokeKind::Inside);
-            p.circle_filled(egui::pos2(body.center().x, body.top() - 1.3), 2.5, color);
-            p.circle_filled(egui::pos2(body.right() + 1.3, body.center().y), 2.5, color);
-        }
-        Icon::Shield | Icon::ShieldOff => {
-            let outline = [(0.0, -6.5), (5.5, -4.3), (5.0, 1.2), (0.0, 6.5), (-5.0, 1.2), (-5.5, -4.3), (0.0, -6.5)];
-            line(&outline);
-            if matches!(icon, Icon::Shield) {
-                line(&[(-2.3, 0.0), (-0.5, 1.9), (2.6, -1.6)]);
-            } else {
-                line(&[(-6.5, 6.5), (6.5, -6.5)]);
-            }
-        }
-        Icon::Speaker | Icon::Muted => {
-            let body = [(-6.0, -2.0), (-3.5, -2.0), (0.5, -5.5), (0.5, 5.5), (-3.5, 2.0), (-6.0, 2.0)];
-            p.add(Shape::convex_polygon(body.iter().map(|&(x, y)| c + Vec2::new(x, y)).collect(), color, Stroke::NONE));
-            if matches!(icon, Icon::Muted) {
-                line(&[(3.0, -2.5), (7.0, 2.5)]);
-                line(&[(3.0, 2.5), (7.0, -2.5)]);
-            } else {
-                line(&[(3.0, -2.5), (4.3, 0.0), (3.0, 2.5)]);
-                line(&[(5.2, -4.8), (7.2, 0.0), (5.2, 4.8)]);
-            }
-        }
+    let size = rect.width().min(rect.height()).min(ICON_PT);
+    let ppp = p.ctx().pixels_per_point();
+    let px = (size * ppp).round().max(1.0) as u32;
+    // Snap to whole pixels so the 1-pixel-wide details don't blur.
+    let side = px as f32 / ppp;
+    let min = ((rect.center() - Vec2::splat(side / 2.0)) * ppp).round() / ppp;
+    let draw = Rect::from_min_size(min, Vec2::splat(side));
+    if let Some(tex) = icon_texture(p.ctx(), icon, px) {
+        p.image(tex.id(), draw, Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)), color);
     }
 }
 
@@ -172,23 +150,8 @@ pub fn star_button(ui: &mut egui::Ui, pal: &Palette, filled: bool) -> egui::Resp
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(7), pal.hover);
     }
-    let c = rect.center();
-    let pts: Vec<Pos2> = (0..10)
-        .map(|i| {
-            let r = if i % 2 == 0 { 7.0 } else { 3.0 };
-            let a = std::f32::consts::PI * (i as f32 / 5.0) - std::f32::consts::FRAC_PI_2;
-            c + Vec2::new(a.cos(), a.sin()) * r
-        })
-        .collect();
-    let p = ui.painter();
-    if filled {
-        // A star is star-shaped around its centre, so a triangle fan fills it.
-        for i in 0..10 {
-            p.add(Shape::convex_polygon(vec![c, pts[i], pts[(i + 1) % 10]], pal.accent, Stroke::NONE));
-        }
-    } else {
-        p.add(Shape::closed_line(pts, Stroke::new(1.4, pal.muted)));
-    }
+    let (icon, color) = if filled { (Icon::StarFilled, pal.accent) } else { (Icon::Star, pal.muted) };
+    paint_icon(ui.painter(), rect, icon, color);
     resp.on_hover_text(if filled { "Remove bookmark (Ctrl+D)" } else { "Bookmark this page (Ctrl+D)" })
 }
 
@@ -223,27 +186,13 @@ pub fn window_button(ui: &mut egui::Ui, pal: &Palette, kind: WinBtn) -> egui::Re
         p.rect_filled(rect, CornerRadius::ZERO, fill);
     }
     let color = if hovered && is_close { Color32::WHITE } else { pal.text };
-    let s = Stroke::new(1.0, color);
-    let c = rect.center();
-    match kind {
-        WinBtn::Minimize => {
-            p.line_segment([c + Vec2::new(-5.0, 0.0), c + Vec2::new(5.0, 0.0)], s);
-        }
-        WinBtn::Maximize => {
-            p.rect_stroke(Rect::from_center_size(c, Vec2::splat(10.0)), CornerRadius::same(1), s, egui::StrokeKind::Inside);
-        }
-        WinBtn::Restore => {
-            p.rect_stroke(Rect::from_center_size(c + Vec2::new(-1.0, 1.0), Vec2::splat(8.0)), CornerRadius::same(1), s, egui::StrokeKind::Inside);
-            p.add(Shape::line(
-                vec![c + Vec2::new(-3.0, -3.0), c + Vec2::new(-3.0, -5.0), c + Vec2::new(5.0, -5.0), c + Vec2::new(5.0, 3.0), c + Vec2::new(3.0, 3.0)],
-                s,
-            ));
-        }
-        WinBtn::Close => {
-            p.line_segment([c + Vec2::new(-5.0, -5.0), c + Vec2::new(5.0, 5.0)], s);
-            p.line_segment([c + Vec2::new(-5.0, 5.0), c + Vec2::new(5.0, -5.0)], s);
-        }
-    }
+    let icon = match kind {
+        WinBtn::Minimize => Icon::Minimize,
+        WinBtn::Maximize => Icon::Maximize,
+        WinBtn::Restore => Icon::Restore,
+        WinBtn::Close => Icon::WindowClose,
+    };
+    paint_icon(p, rect, icon, color);
     let tip = match kind {
         WinBtn::Minimize => "Minimize",
         WinBtn::Maximize => "Maximize",
